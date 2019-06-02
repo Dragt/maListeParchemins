@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', rattraperLeCoup);
 
 function rattraperLeCoup() {
     
-    document.getElementsByTagName('body')[0].insertAdjacentHTML('afterbegin', '<p>Page fixe permettant de se faire une idée des fonctionnalités de la v1.0. Depuis lors l\'outil a évoluée.</p>');
+    document.getElementsByTagName('body')[0].insertAdjacentHTML('afterbegin', '<p>Page fixe permettant de se faire une idée des fonctionnalités de la v1.0. Depuis lors l\'outil a évolué.</p>');
     
     document.querySelector('button').addEventListener('click', afficherRecapitulatif); // le premier...
 
