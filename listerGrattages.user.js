@@ -12,6 +12,10 @@
  * 1) Installez ce script dans Violent Monkey
  * 2) Connectez-vous à MH avec 2 PAs restants (session active)
  * 3) Ayez sur votre trõll les parchemins à analyser
+ * 4a) pour lancer l'outil, cliquer sur le bouton à côté des parchemins dans la page equipement
+ * 4b) ou alors rendez-vous à l'adresse : https://games.mountyhall.com/mountyhall/MH_Play/Actions/Competences/userscriptGrattage
+ *
+ * Pour l'utiliser comme un script js classique lié à une page html, simplement mettre la constante STATIQUE à 1
  */
 
 /* 2019-06-01 v1.0 : version de base
@@ -59,7 +63,7 @@ displayDebug(window.location.href);
 
 //---------------------- variables globales et constantes : Général -----------------------//
 
-const STATIQUE = 0;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
+const STATIQUE = 1;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
 const EXPORTER_PARCHEMINS = 0;   // affiche en console l'enregistrement des parchemins après récupération dans le hall
 
 const MAX_APPELS = 200;  // nombre maximum -1 de parchemins traités en une fois par l'outil
