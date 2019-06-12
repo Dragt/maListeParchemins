@@ -59,7 +59,7 @@ displayDebug(window.location.href);
 
 //---------------------- variables globales et constantes : Général -----------------------//
 
-const STATIQUE = 1;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
+const STATIQUE = 0;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
 const EXPORTER_PARCHEMINS = 0;   // affiche en console l'enregistrement des parchemins après récupération dans le hall
 
 const MAX_APPELS = 200;  // nombre maximum -1 de parchemins traités en une fois par l'outil
@@ -449,8 +449,6 @@ class ParcheminEnPage extends Parchemin {
     calculerValeurMax(carac, cocher=false) {
         // d'abord fait en reducer mais pas aussi lisible...
         let max = 0;
-        if (this.id == "1252192") {
-            console.log('t'); } // && i == 9
         for (const g of this.glyphes) {
             if (!g.estSansEffet) {
                 for (let i = 0; i < g.caracteristiques.length; i++) {
@@ -984,8 +982,9 @@ class OutilListerGrattage {
         this.filtre = {};
         this.zoneDateEnregistrement;
         this.texteRecapitulatif;
-        this.index = [];              //ordre dans lequel afficher les parchemins, liste de positions (par rapport à this.parchemin)
-
+        // index pour connaitre ordre dans lequel afficher les parchemins, liste de positions (par rapport à this.parchemin)
+        // pour le moment il n'y a pas de raison vraiment convaincante à ne jamais toucher directement à l'ordre initial de this.parchemins ?
+        this.index = [];
         // idéalement une classe pour la gui, mais ici c'est encore restreint
         this.table;
         this._preparerPageListe();
@@ -1434,16 +1433,11 @@ class OutilListerGrattage {
         }
     }
 
-    // TODO ne sauvegarde pas l'ordre des parchemins... faudrait y réfléhir, serait facile de trier la liste d'origine...
     sauvegarderLocalement() {
         const sauvegardeTexte = JSON.stringify(this.exporterParchemins());
-        console.log(sauvegardeTexte);
+        console.log(sauvegardeTexte); // normalement il y a l'export pour ça...
         window.localStorage.setItem('sauvegardeListerGrattages', sauvegardeTexte);
         alert("Etat sauvegardé.");
-        /*prompt ("Etat sauvegardé. (A priori.)\n" +
-            " Voici l'enregistrement à copier (Ctrl+C) pour l'importer manuellement :",
-            sauvegardeTexte
-        );*/
     }
 
     validerImport() {
@@ -1452,7 +1446,6 @@ class OutilListerGrattage {
         if (introduit) {
             try {
                 sauvegarde = JSON.parse(introduit);
-                console.log(sauvegarde);
                 this.importerParcheminsEtAfficher(sauvegarde);
                 alert("Enregistrement importé.");
             }
