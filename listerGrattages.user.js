@@ -39,7 +39,8 @@
  * refactoring complet pour rigoler
  * améliorations affichages résumé
  * Possibilité de filtrer et trier
- * Possibilité d'enregistrer et charger localement, plus de chargement automatique depuis le hall
+ * Possibilité d'enregistrer et charger localement, en plus du chargement automatique depuis le hall
+ * Possibilité d'importer et d'exporter au format texte
  */
 
 // ****************************************************************************************************************************
@@ -448,9 +449,12 @@ class ParcheminEnPage extends Parchemin {
     calculerValeurMax(carac, cocher=false) {
         // d'abord fait en reducer mais pas aussi lisible...
         let max = 0;
+        if (this.id == "1252192") {
+            console.log('t'); } // && i == 9
         for (const g of this.glyphes) {
             if (!g.estSansEffet) {
                 for (let i = 0; i < g.caracteristiques.length; i++) {
+
                     if (g.caracteristiques[i].id == carac) {
                         if (ORIENTATIONS_GLYPHES[g.orientation].impact[i] > 0) {
                             max += (g.puissance - i);
@@ -987,9 +991,7 @@ class OutilListerGrattage {
         this._preparerPageListe();
 
         if (STATIQUE) {
-            this.importerParchemins(JSON.parse(SAUVEGARDE));
-            this.afficherParcheminsGardes();
-            //this.viderTexteRecapitulatif();
+            this.importerParcheminsEtAfficher(JSON.parse(SAUVEGARDE));
         }
         else {
             this.chargerLocalement();
@@ -1118,10 +1120,10 @@ class OutilListerGrattage {
 
         for(const [i, p] of Object.entries(this.parchemins)) {
             let garde = true;
-            let valeur;
+            let valeur = ((type == AU_MOINS) ? -Infinity : Infinity); // besoin d'initialiser pour que le tri fonctionnne
 
             if (zone) {
-                if (p.calculerValeurMax(ZONE, true) <= 0) garde = false;
+                if (p.calculerValeurMax(ZONE, false) <= 0) garde = false; // pourrait mettre à true si on veut coher pour un max effet de zone
             }
 
             if (garde) {
@@ -1239,24 +1241,38 @@ class OutilListerGrattage {
     _attacherBoutonsChargement() {
         const divBoutonsChargement = Createur.elem('div', { parent: this.zone, style: "margin:0vmin; padding:0.1vmin; border:solid 0px black" });
 
+        Createur.elem('button', {                        // boutonSauvegarderLocalement
+            texte : 'Sauvegarder (dans navigateur)',
+            style: "margin: 10px 5px 10px 10px; background-color: #0074D9", // bleu
+            parent: divBoutonsChargement,
+            events: [{nom: 'click', fonction: this.sauvegarderLocalement, bindElement: this}],
+            classesHtml: ['mh_form_submit'] });
+
         Createur.elem('button', {                       // boutonChargerLocalement
-            texte : 'Charger le dernier état (local)',
-            style: "margin: 10px",
+            texte : 'Charger (depuis navigateur)',
+            style: "margin: 10px 20px 10px 5px",
             parent: divBoutonsChargement,
             events: [{nom: 'click', fonction: this.chargerLocalement, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
-        Createur.elem('button', {                        // boutonSauvegarderLocalement
-            texte : 'Sauvegarder l\'état Actuel (local)',
-            style: "margin: 10px",
+        Createur.elem('button', {                       // boutonChargerLocalement
+            texte : 'Importer (texte)',
+            style: "margin: 10px 5px 10px 20px",
             parent: divBoutonsChargement,
-            events: [{nom: 'click', fonction: this.sauvegarderLocalement, bindElement: this}],
+            events: [{nom: 'click', fonction: this.validerImport, bindElement: this}],
+            classesHtml: ['mh_form_submit'] });
+
+        Createur.elem('button', {                       // boutonChargerLocalement
+            texte : 'Exporter (texte)',
+            style: "margin: 10px 20px 10px 5px",
+            parent: divBoutonsChargement,
+            events: [{nom: 'click', fonction: this.afficherExport, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
         if (!STATIQUE) {
             Createur.elem('button', {                        // boutonchargerDepuisHall
                 texte: 'Charger depuis votre inventaire (Hall)',
-                style: "margin: 10px",
+                style: "margin: 10px 20px 10px 20px; background-color: #FF851B", //orange
                 parent: divBoutonsChargement,
                 events: [{nom: 'click', fonction: this.chargerDepuisHall, bindElement: this}],
                 classesHtml: ['mh_form_submit']
@@ -1265,7 +1281,7 @@ class OutilListerGrattage {
         else {
             Createur.elem('button', {                        // boutonchargerDepuisHall
                 texte: 'Charger depuis votre inventaire (Hall)',
-                style: "margin: 10px; background-color: grey",
+                style: "margin: 10px 20px 10px 20px; background-color: #AAAAAA", // gris
                 parent: divBoutonsChargement,
                 attributs: [['disabled', 'true']],
                 events: [{nom: 'click', fonction: this.chargerDepuisHall, bindElement: this}],
@@ -1340,7 +1356,7 @@ class OutilListerGrattage {
 
         html +=
             `<input style="margin:5px 0 5px 5px; padding:3px" id="effetZoneObligatoire" name="effetZoneObligatoire" type="checkbox">
-              <label style="margin:5px 5px 5px 0; padding:3px" for="effetZoneObligatoire">Effet de zone obligatoire</label>`
+              <label style="margin:5px 5px 5px 0; padding:3px" for="effetZoneObligatoire">Effet de zone possible</label>`
 
         html +=
             `<button style="margin:5px; padding:3px" class="mh_form_submit" id="boutonRecherche">Filtrer et Trier</button>`;
@@ -1366,7 +1382,7 @@ class OutilListerGrattage {
         this.table.innerHTML = "";
     }
 
-
+    // renvoie un objet sauvegarde
     exporterParchemins() {
         const sauvegarde = {     // Sauvegarde pourrait avoir sa classe
             parchemins: [],
@@ -1391,6 +1407,7 @@ class OutilListerGrattage {
         return sauvegarde;
     }
 
+    // reçoit un objet sauvergarde
     importerParchemins(sauvegarde) {
         this.parchemins = [];
 
@@ -1401,12 +1418,16 @@ class OutilListerGrattage {
         this.index = sauvegarde.index;
     }
 
+    importerParcheminsEtAfficher(sauvegarde) {
+        this.importerParchemins(sauvegarde)
+        this.afficherParcheminsGardes();
+        this.viderTexteRecapitulatif();
+    }
+
     chargerLocalement() {
         if (window.localStorage.getItem('sauvegardeListerGrattages')) {
             const sauvegarde = JSON.parse(window.localStorage.getItem('sauvegardeListerGrattages'));
-            this.importerParchemins(sauvegarde);
-            this.afficherParcheminsGardes();
-            this.viderTexteRecapitulatif();
+            this.importerParcheminsEtAfficher(sauvegarde);
         }
         else {
             alert('Aucune donnée trouvée localement.');
@@ -1418,7 +1439,52 @@ class OutilListerGrattage {
         const sauvegardeTexte = JSON.stringify(this.exporterParchemins());
         console.log(sauvegardeTexte);
         window.localStorage.setItem('sauvegardeListerGrattages', sauvegardeTexte);
-        alert ('Etat sauvegardé. (A priori.)');
+        alert("Etat sauvegardé.");
+        /*prompt ("Etat sauvegardé. (A priori.)\n" +
+            " Voici l'enregistrement à copier (Ctrl+C) pour l'importer manuellement :",
+            sauvegardeTexte
+        );*/
+    }
+
+    validerImport() {
+        const introduit = prompt ("Collez l'enregistrement (Ctrl+V) à importer :", "");
+        let sauvegarde;
+        if (introduit) {
+            try {
+                sauvegarde = JSON.parse(introduit);
+                console.log(sauvegarde);
+                this.importerParcheminsEtAfficher(sauvegarde);
+                alert("Enregistrement importé.");
+            }
+            catch (e) {
+                alert("Problème rencontré lors de l'import");
+                console.log(e);
+            }
+        }
+    }
+
+    afficherExport() {
+        // Ouch, le default value de chrome c'est maximum 2000 carac. Infini pour les autres... infini à l'insertion
+        //prompt(" Voici l'enregistrement à copier (Ctrl+C) pour ensuite l'importer manuellement :",
+        //JSON.stringify(this.exporterParchemins()));
+
+        // Et pas possible de copier directement dans clipboard?... donc passer par un élément...
+        copierDansPressePapier(this.exporterParchemins());
+        alert("L'enregistrement est copié dans le presse-papier.\n" +
+            "Vous pouvez maintenant le copier (Ctrl+v).");
+
+        function copierDansPressePapier(texte) {
+            // Create new element
+            const textarea = document.createElement('textarea');
+            textarea.value = JSON.stringify(texte);
+            textarea.setAttribute('readonly', '');
+            // ta.style.display = 'none'; // doit être visible pour être sélectionné? ...
+            textarea.style = {position: 'absolute', left: '-9999px'}; // donc on le fout n'importe où
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+        }
     }
 
 }
