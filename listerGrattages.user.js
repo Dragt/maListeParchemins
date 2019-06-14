@@ -4,7 +4,7 @@
 // @include */mountyhall/MH_Play/Actions/Competences/userscriptGrattage
 // @include */mountyhall/MH_Play/Play_equipement.php
 // @grant none
-// @version 1.3
+// @version 1.4
 // ==/UserScript==
 //
 
@@ -45,6 +45,15 @@
  * Possibilité de filtrer et trier
  * Possibilité d'enregistrer et charger localement, en plus du chargement automatique depuis le hall
  * Possibilité d'importer et d'exporter au format texte
+ */
+
+/*  v1.4 :
+ * structure en dictionnaire pour les parchemins
+ * notion de parchemins "bons" et "mauvais", avec boutons pour les faire changer de catégorie et filtre
+ * ne va plus chercher les parchemins déjà connus en local, pour soulager au max le serveur (à tester)
+ * possibiliter de choisir si les données importées complètent ou remplace l'actuel 
+ * recapitulatif remanié
+ * champ de duree separe des autres carac 
  */
 
 // ****************************************************************************************************************************
@@ -327,7 +336,7 @@ class Createur {
 //************************* Classe Parchemin *************************
 // contient les données liées à un parchemin, y compris ses glyphes
 
-/* Exemple :
+/* Exemple OBSOLETE :
  {"id":"9308040",
  "nom":"Yeu'Ki'Pic Gribouillé",
  "effetDeBaseTexte":"Vue : -6 | PV : +6 D3 | Effet de Zone",
@@ -348,12 +357,13 @@ class Parchemin {
      */
     static get NOMBRE_GLYPHES() { return 10; }
 
-    constructor(id, nom=undefined, effetDeBaseTexte=undefined, glyphes=[] ) {
+    constructor(id, nom=undefined, effetDeBaseTexte=undefined, glyphes=[], dateEnregistrement=new Date() ) {
         this.id = id;
         this.nom = nom;
         this.effetDeBaseTexte = effetDeBaseTexte;
         this.complet = false;                             // considéré complet lorsque 10 glyphes
         this.glyphes = [];
+        this.dateEnregistrement = dateEnregistrement;
         for (const g of glyphes) this.ajouterGlyphe(g);   // array d'objets Glyphes
     }
 
@@ -380,6 +390,9 @@ class Parchemin {
 
 //************************* Classe ParcheminEnPage *************************
 
+const QUALITE_BON = 1;
+const QUALITE_NEUTRE = 0;
+const QUALITE_MAUVAIS = -1;
 // constructor(id, nom, effetDeBaseTexte, glyphes)
 // get cochagesGlyphes
 // get effetTotalHtml
@@ -392,7 +405,7 @@ class Parchemin {
 // _creerLigneEffetTotal(parent)
 // _creerLigneSeparation(parent)
 // static _mettreEnFormeTd(td)
-// supprimerParchemin()
+// cacherParchemin()
 // rafraichirEffetTotal()
 // static creerParchemin(enregistrement)
 
@@ -401,13 +414,19 @@ class ParcheminEnPage extends Parchemin {
 
     static get W_COL1() { return "10vw"};
 
-    constructor(id, nom, effetDeBaseTexte, glyphes, garde=true) {
+    constructor(id, nom, effetDeBaseTexte, glyphes, affiche=true, qualite=QUALITE_NEUTRE) {
         super(id, nom, effetDeBaseTexte, glyphes);
         this.ligneEffetsGlyphes;    // TODO pas top ce système en trois ligne, trimballé du passé, à refactorer en un element
         this.ligneEffetTotal;
         this.tdEffetTotal;
         this.ligneSeparation;
-        this.potentiellementInteressant = garde; // pour l'afficher ou non dans l'outil
+        this.affiche = affiche; // pour l'afficher ou non dans l'outil
+        this.qualite = qualite;
+
+        this.boutonBon;
+        this.boutonCacher;
+        this.boutonMauvais;
+
     }
 
     get cochagesGlyphes() {
@@ -440,7 +459,7 @@ class ParcheminEnPage extends Parchemin {
     calculerCaracMax() {
         const valeursMax = [];
         for(let i = 0; i < 10; i++) {
-            if (i != ZONE) {
+            if ((i != ZONE) && (i != DUREE)) {
                 valeursMax.push(this.calculerValeurMax(i, false));
             }
             else {
@@ -478,7 +497,7 @@ class ParcheminEnPage extends Parchemin {
     calculerCaracMin() {
         const valeursMin = [];
         for(let i = 0; i < 10; i++) {
-            if (i != ZONE) {
+            if ((i != ZONE) && (i != DUREE)) {
                 valeursMin[i] = this.calculerValeurMin(i, false);
             }
             else {
@@ -510,6 +529,7 @@ class ParcheminEnPage extends Parchemin {
         return min;
     }
 
+    // REMARQUE : crée mais n'affiche pas
     creerLignes(parent, position) {
         this.ligneEffetsGlyphes = this._creerLigneEffetsGlyphes(parent, position);
         this.ligneEffetTotal = this._creerLigneEffetTotal(parent);
@@ -517,19 +537,42 @@ class ParcheminEnPage extends Parchemin {
     }
 
     _creerLigneEffetsGlyphes(parent, position) {
-        const trEffetsGlyphes = Createur.elem('tr', { parent: parent });
-        const boutonSupprimer = Createur.elem('button', {
-            id: this.id + '-supprimer',
-            attributs: [['title', 'Supprimer ce parchemin']],
+        const trEffetsGlyphes = Createur.elem('tr', { parent: parent, style: "text-align: center; display: none" }); //tout est caché par défaut
+
+        this.boutonBon = Createur.elem('button', {
+            id: this.id + '-boutonBon',
+            attributs: [['title', 'Définir ce parchemin comme "bon"']],
+            enfants: [document.createTextNode('V')],
+            events: [{ nom: 'click', fonction: this.changerQualite, bindElement: this, param: [QUALITE_BON, true] }],
+            classesHtml: ['mh_form_submit'],
+            style : "background-color: #c9d8c5; margin: 5px", // vert
+        });
+
+        this.boutonCacher = Createur.elem('button', {
+            id: this.id + '-boutonCacher',
+            attributs: [['title', 'Cacher ce parchemin temporairement']],
+            enfants: [document.createTextNode('_')],
+            events: [{ nom: 'click', fonction: this.cacherParchemin, bindElement: this }],
+            classesHtml: ['mh_form_submit'],
+            style : "background-color: #a8b6bf; margin: 5px", // bleu
+        });
+
+        this.boutonMauvais = Createur.elem('button', {
+            id: this.id + '-boutonMauvais',
+            attributs: [['title', 'Définir ce parchemin comme "mauvais"']],
             enfants: [document.createTextNode('X')],
-            events: [{ nom: 'click', fonction: this.supprimerParchemin, bindElement: this }],
-            classesHtml: ['mh_form_submit'] });
+            events: [{ nom: 'click', fonction: this.changerQualite, bindElement: this, param: [QUALITE_MAUVAIS, true] }],
+            classesHtml: ['mh_form_submit'],
+            style : "background-color: #edd9c0; margin: 5px", // orange
+        });
 
         Createur.elem('td', {                                     // si besoin de nom : const tdIdParchemin
             attributs: [['title', this.effetDeBaseTexte]],
             parent: trEffetsGlyphes,
             style: "width: " + ParcheminEnPage.W_COL1,
-            enfants: [boutonSupprimer, document.createTextNode('[' +  (position + 1) + ']  ' + this.id)] });
+            enfants: [document.createTextNode('[' +  (position + 1) + ']  ' + this.id), Createur.elem('br'),
+                this.boutonBon, this.boutonCacher, this.boutonMauvais
+                ] });
 
         const tdEffetsGlyphes = Createur.elem('td', { parent: trEffetsGlyphes });
         const tableEffetsGlyphes = Createur.elem('table', { id: this.id, parent: tdEffetsGlyphes });
@@ -546,8 +589,70 @@ class ParcheminEnPage extends Parchemin {
         return trEffetsGlyphes;
     }
 
+
+    changerQualite(nouvelleQualite, inversion=false) {
+
+        if (nouvelleQualite === QUALITE_BON) {
+            if (this.qualite == QUALITE_BON) {
+                if (inversion) this.devenirNeutre();
+            }
+            else {
+                this.devenirBon();
+            }
+        }
+        else { // QUALITE_MAUVAIS
+            if (this.qualite == QUALITE_MAUVAIS) {
+                if (inversion) this.devenirNeutre();
+            }
+            else {
+                this.devenirMauvais();
+            }
+        }
+    }
+
+    devenirBon(affichagesBon) {
+        this.qualite = QUALITE_BON;
+        this.boutonBon.style.display = 'inline-block';
+        this.boutonCacher.style.display = 'none';
+        this.boutonMauvais.style.display = 'none';
+        if (document.getElementById('affichagesBonsCheckbox').checked) {  // moche de passer par là... et comme ça...
+            this.afficherParchemin();
+        }
+        else {
+            this.cacherParchemin();
+        }
+    }
+
+    devenirNeutre() {
+        this.qualite = QUALITE_NEUTRE;
+        this.boutonBon.style.display = 'inline-block';
+        this.boutonCacher.style.display = 'inline-block';
+        this.boutonMauvais.style.display = 'inline-block';
+        if (this.affiche) {
+            this.afficherParchemin();
+        }
+        else {
+            this.cacherParchemin();
+        }
+    }
+
+    devenirMauvais(affichagesMauvais) {
+        this.qualite = QUALITE_MAUVAIS;
+        this.boutonBon.style.display = 'none';
+        this.boutonCacher.style.display = 'none';
+        this.boutonMauvais.style.display = 'inline-block';
+        if (document.getElementById('affichagesMauvaisCheckbox').checked) {
+            this.afficherParchemin();
+        }
+        else {
+            this.cacherParchemin();
+        }
+    }
+
+
+
     _creerLigneEffetTotal(parent) {
-        const trEffetTotal = Createur.elem('tr', { parent: parent });
+        const trEffetTotal = Createur.elem('tr', { parent: parent, style: "text-align: center; display: none"  });
         const tdNomParchemin = Createur.elem('td', {
             texte : this.nom,
             attributs: [['title', this.effetDeBaseTexte]],
@@ -560,7 +665,7 @@ class ParcheminEnPage extends Parchemin {
     }
 
     _creerLigneSeparation(parent) {                                   // potentiellement static ...
-        const trSeparation = Createur.elem('tr', { parent: parent });
+        const trSeparation = Createur.elem('tr', { parent: parent, style: "text-align: center; display: none"  });
         const tdTirets = Createur.elem('td', {
             texte: '------------------',
             style: "width: " + ParcheminEnPage.W_COL1,
@@ -574,11 +679,18 @@ class ParcheminEnPage extends Parchemin {
     }
 
     // this est le parchemin, même si appelé depuis le bouton
-    supprimerParchemin() {
+    cacherParchemin() {
         this.ligneEffetsGlyphes.style.display = 'none';
         this.ligneEffetTotal.style.display = 'none';
         this.ligneSeparation.style.display = 'none';
-        this.potentiellementInteressant = false;
+        this.affiche = false;
+    }
+
+    afficherParchemin() {
+        this.ligneEffetsGlyphes.style.display = 'table-row';
+        this.ligneEffetTotal.style.display = 'table-row';
+        this.ligneSeparation.style.display = 'table-row';
+        this.affiche = true;
     }
 
     rafraichirEffetTotal() {
@@ -590,7 +702,13 @@ class ParcheminEnPage extends Parchemin {
         for (const [i, numero] of Object.entries(enregistrement.glyphesNumeros)) {
             nouveauxGlyphes.push(new GlypheEnPage(numero, enregistrement.glyphesCoches[i]));
         }
-        return new ParcheminEnPage(enregistrement.id, enregistrement.nom, enregistrement.effetDeBaseTexte, nouveauxGlyphes, enregistrement.garde);
+        return new ParcheminEnPage(
+            enregistrement.id,
+            enregistrement.nom,
+            enregistrement.effetDeBaseTexte,
+            nouveauxGlyphes,
+            enregistrement.affiche,
+            enregistrement.qualite);
     }
 }
 
@@ -910,6 +1028,7 @@ class Recuperateur {
     _extraireParchemins(reponseHtml) {
         displayDebug("_extraireParchemins : ")
         //displayDebug(reponseHtml.querySelector('body').innerHTML);
+
         const parcheminsRecuperes = [];
         for (const option of reponseHtml.querySelectorAll('optgroup option')) {
             const nomParchemin = option.innerHTML.split(' - ')[1];
@@ -950,15 +1069,21 @@ class Recuperateur {
 
 //************************* Classe OutilListerGrattage *************************
 
+const CRITERE_DATE = 90;
+const CRITERE_ID = 91;
+
+const IMPORTER_COMPLETER = 1;
+const IMPORTER_REMPLACER = 2;
+
 // constructor(parent)
 // chargerDepuisHall()
 // construireIndex(index=this.parchemins)
 // recevoirParcheminsInfosBase(parcheminsRecus)
 // _appelerRechercherGlyphes(position)
 // recevoirParcheminInfosComposition(parcheminRecu)
-// reinitialiserChoix(interessant, cochages)
-// afficherTousParchemins()
-// afficherParcheminsGardes()
+// reinitialiserChoix(affiche, cochages)
+// genererTousParchemins()
+// ...()
 // afficherParcheminsFiltres()
 // _afficherParchemin(parchemin, position)
 // nettoyerParchemins()
@@ -981,14 +1106,20 @@ class OutilListerGrattage {
     constructor(parent) {
         this.parent = parent;
         this.zone;
-        this.parchemins = [];
+        this.parchemins = {};
+        // index pour connaitre ordre dds parchemins
+        this.index = [];
+        this.indexNouveauxParchemins = [];
         this.incomplets = [];
         this.filtre = {};
         this.zoneDateEnregistrement;
         this.texteRecapitulatif;
-        // index pour connaitre ordre dans lequel afficher les parchemins, liste de positions (par rapport à this.parchemin)
-        // pour le moment il n'y a pas de raison vraiment convaincante à ne jamais toucher directement à l'ordre initial de this.parchemins ?
-        this.index = [];
+        this.affichagesBonsCheckbox; // TODO penser comment enregistrer et recharger préférences d'avant
+        this.affichagesMauvaisCheckbox;
+        // TODO enregistrer le critere de tri actuel
+
+        this.dateDerniereModification; // TODO permet de tester si correspond à celle de la sauvegarde, pour afficher si sauvé ou non
+
         // idéalement une classe pour la gui, mais ici c'est encore restreint
         this.table;
         this._preparerPageListe();
@@ -1001,15 +1132,22 @@ class OutilListerGrattage {
         }
     }
 
-    construireIndex(listeParchemins=this.parchemins) {
-        this.index = listeParchemins.map((p, i) => i) ;
+    // TODO : pour le moment pas optimal ?, on trie tout, même ce qu'on ne veut pas afficher
+    // TODO : Integrer la construction de l'indexe de AfficherParcheminsFiltres ici
+    construireIndex(critere=CRITERE_ID) {
+        switch (critere) {
+            case CRITERE_DATE :
+            case CRITERE_ID:
+            default:   // par id de parchemin
+                this.index =  Object.keys(this.parchemins).sort((i1, i2) => i1 - i2);
+        }
     }
 
     chargerDepuisHall() {
         // à mettre après préparation pour pouvoir table déjà créée ?
-        this.viderTableParchemins();
-        this.viderTexteRecapitulatif();
-        this.index = [];
+        this.viderTableParchemins();    // pas nécessaire
+        this.viderTexteRecapitulatif(); // pas nécessaire ?
+        //this.index = [];              // pas nécessaire
         this.recuperateur = new Recuperateur(this);
         this.recuperateur.vaChercherParchemins();
         this.zoneDateEnregistrement.innerText = "Moment du chargement : " + new Date().toLocaleString();
@@ -1020,22 +1158,37 @@ class OutilListerGrattage {
     recevoirParcheminsInfosBase(parcheminsRecus) {
         displayDebug("recevoirParcheminsInfosBase");
         displayDebug(parcheminsRecus);
-        this.parchemins =  parcheminsRecus.map(p => new ParcheminEnPage(p.id, p.nom));
-        this.construireIndex(parcheminsRecus);
+
+        // REMARQUE !!! On supprime les parchemins que l'on connait déjà pour faire moins d'appels.
+        console.log("parcheminsRecus taille avant: " + parcheminsRecus.length);
+        parcheminsRecus.filter(p => !(p.id in this.parchemins));
+        console.log("parcheminsRecus taille après: " + parcheminsRecus.length);
+        parcheminsRecus.forEach(p => {
+            this.parchemins[p.id] = new ParcheminEnPage(p.id, p.nom);
+            this.index.push(p.id);
+        });
+
+        // this.construireIndex(CRITERE_ID); // on garde l'ordre précédent avant ajout pour le début, comme ça les nouveaux arrivent à la fin ?
+
 
         // Attention requêtes pour les glyphes des différents parchemins les unes à la suite des autres, ne doivent pas se chevaucher
         compteurSecuriteNombreAppels = 0;
-        this._appelerRechercherGlyphes(0);
+        this.indexNouveauxParchemins =  parcheminsRecus.map(p => p.id);
+        this._appelerRechercherGlyphes();
     }
 
-    _appelerRechercherGlyphes(position) {
-        if (compteurSecuriteNombreAppels++ > MAX_APPELS) return; // empêcher un trop gros nombre d'appels au serveur
-        if ((position < this.parchemins.length) ) this.recuperateur.vaChercherGlyphes(this.parchemins[position].id);
+    _appelerRechercherGlyphes() {
+        if (++compteurSecuriteNombreAppels > MAX_APPELS) return; // empêcher un trop gros nombre d'appels au serveur
+
+        if (this.indexNouveauxParchemins.length > 0 ) {
+            this.recuperateur.vaChercherGlyphes(this.indexNouveauxParchemins.shift());
+        }
         else {
             displayDebug("fin _appelerRechercherGlyphes, nombre : " + this.parchemins.length);
             if (EXPORTER_PARCHEMINS) { // pour récupérer les parchemins et travailler en local
                 console.log(JSON.stringify(this.exporterParchemins()));
             }
+            console.log("nombre d'appels à la fin : " + compteurSecuriteNombreAppels);
         }
     }
 
@@ -1046,66 +1199,75 @@ class OutilListerGrattage {
         // TODO renvoyer des parchemins 'pas complètement remplis' aux recevoirxxx permettait d'utiliser une structure existante,
         // TODO mais un peu lourdingue de recréer les objets enPage (et recalculs pour glyphes surtout !...) et de devoir retrouver le parchemin correspondant équivalent
         // TODO Pptions : recevoirxxx avec juste les données nécessaires ? recoivent et complètent les vrais parchemins (solution initiale...)?
-        // TODO Créent des xxxEnPage même si étrange ? Trouver comment caster efficacement du parent -> enfant en js ?
+        // TODO Créent des xxxEnPage même si étrange ? Trouver comment caster efficacement du parent -> enfant en js, ou alors le définir ?
 
-        const position = this.parchemins.findIndex(x => x.id === parcheminRecu.id);
-        const parcheminEnPage = this.parchemins[position];
-        parcheminEnPage.effetDeBaseTexte = parcheminRecu.effetDeBaseTexte;
+        const p = this.parchemins[parcheminRecu.id];
+        p.effetDeBaseTexte = parcheminRecu.effetDeBaseTexte;
         for (const glyphe of parcheminRecu.glyphes) {
-            parcheminEnPage.ajouterGlyphe(new GlypheEnPage(glyphe.numero));
+            p.ajouterGlyphe(new GlypheEnPage(glyphe.numero));
         }
 
         displayDebug('------------------------------------------------');
-        displayDebug(parcheminEnPage);
-        //displayDebug(JSON.stringify(parcheminEnPage));
+        displayDebug(p);
 
         // si le parchemin n'est pas traitable/complet, on l'affiche quand même avec glyphes manquants [old : le retire directement]
-        if (!parcheminEnPage.complet) {
-            this.incomplets.push(parcheminEnPage.id + " " + parcheminEnPage.nom);
-            displayDebug("parchemin incomplet : " + parcheminEnPage.id + " " + parcheminEnPage.nom);
-            //this.parchemins.splice(position, 1);
-            //this._appelerRechercherGlyphes(position) ;
+        if (!p.complet) {
+            this.incomplets.push(p.id);                                 // la liste des incomplets ne sert à rien pour le moment :)
+            displayDebug("parchemin incomplet : " + p.id + " " + p.nom);
         }
-        //else {
-        //    this._appelerRechercherGlyphes(position + 1) ;
-        //    this._afficherParchemin(parcheminEnPage, position);
-        //}
 
-        this._appelerRechercherGlyphes(position + 1) ;
-        this._afficherParchemin(parcheminEnPage, position);
-
+        this._appelerRechercherGlyphes() ;
+        this._genererParcheminHtml(p, this.index.length); // TODO ouch, suite au refactoring je n'ai plus la position, rustine à la va vite, à voir si ça tient. :) Sinon rustine avec compteurSecuriteNombreAppels
+        p.afficherParchemin();
         // après avoir reçu des glyphes d'un parchemin à traiter, on fait la requête pour le parchemin suivant
-        // TODO A quel point plus lourd de retrouver l'indice ? convertir en dict pour parchemins... ?G?
-        // TODO Ou garder simplement indice en mémoire ? D'autant plus que j'ai déjà le compteur de securite en globale ! :D
-
     }
 
 
-    reinitialiserChoix(interessant, cochages) {
-        for (const p of this.parchemins) {
-            if (interessant) p.potentiellementInteressant = true;
+    reinitialiserChoix(affiche, cochages) {
+        for (const id in this.parchemins) {
+            if (affiche) this.parchemins[id].affiche = true;
             if (cochages) {
-                for(const g of p.glyphes) {
+                for(const g of this.parchemins[id].glyphes) {
                     g.decocher();
                 }
             }
         }
     }
 
-    // TODO fournir en parametres un index de l'ordre des parchemins pour l'utiliser de manière universelle, avec le tri aussi
-    afficherTousParchemins() {
-        this.viderTableParchemins();
-        for (let i = 0; i < this.index.length; i++) {        // attention index
-            this._afficherParchemin(this.parchemins[this.index[i]], i);
-        }
+    afficherParcheminsAdequats() {
+        this.genererTousParcheminsDansPageHtml();
+        this.rafraichirAffichageParchemins();
     }
 
-    // TODO : un peu bizarre... le i affiche correspond au parchemin dans l'array ? Pour filtre pas comme ça je crois
-    afficherParcheminsGardes() {
+    genererTousParcheminsDansPageHtml() {
         this.viderTableParchemins();
-        for (let i = 0; i < this.index.length; i++) {
-            if (this.parchemins[this.index[i]].potentiellementInteressant) {
-                this._afficherParchemin(this.parchemins[this.index[i]], i);
+        for (let i = 0; i < this.index.length; i++) {        // attention index
+            this._genererParcheminHtml(this.parchemins[this.index[i]], i);
+        }
+        // Attention, attache tous les bontons ici sans faire attention à la qualité du parchemin !
+    }
+
+    // numero correspond à l'affichage, sans trou
+    rafraichirAffichageParchemins() {
+        for (let id of this.index) {
+            const p = this.parchemins[id];
+            if (p.qualite == QUALITE_BON) {
+                p.boutonBon.style.display = 'inline-block';
+                p.boutonCacher.style.display = "none";
+                p.boutonMauvais.style.display = "none";
+                if (this.affichagesBonsCheckbox.checked) p.afficherParchemin();
+            }
+            else if (p.qualite == QUALITE_MAUVAIS) {
+                p.boutonBon.style.display = 'none';
+                p.boutonCacher.style.display = "none";
+                p.boutonMauvais.style.display = "inline-block";
+                if (this.affichagesMauvaisCheckbox.checked) p.afficherParchemin();
+            }
+            else if (p.affiche) {
+                p.boutonBon.style.display = 'inline-block';
+                p.boutonCacher.style.display = "inline-block";
+                p.boutonMauvais.style.display = "inline-block";
+                p.afficherParchemin();
             }
         }
     }
@@ -1118,15 +1280,23 @@ class OutilListerGrattage {
         const type = this.filtre.type.value;
         const puissance = Number(this.filtre.puissance.value);
         const carac = Number(this.filtre.carac.value);
+        const duree = Number(this.filtre.duree.value);
         const zone = this.filtre.zone.checked;
         let parcheminsATrier = [];
 
-        for(const [i, p] of Object.entries(this.parchemins)) {
+        for(const id in this.parchemins) {
+            const p = this.parchemins[id];
             let garde = true;
             let valeur = ((type == AU_MOINS) ? -Infinity : Infinity); // besoin d'initialiser pour que le tri fonctionnne
 
             if (zone) {
                 if (p.calculerValeurMax(ZONE, false) <= 0) garde = false; // pourrait mettre à true si on veut coher pour un max effet de zone
+            }
+
+            if (garde) {
+                if (duree > 0) {
+                    if (duree > p.calculerValeurMax(DUREE, false)) garde = false;
+                }
             }
 
             if (garde) {
@@ -1151,66 +1321,78 @@ class OutilListerGrattage {
                     if (valeur > puissance) garde = false;
                 }
             }
-            p.potentiellementInteressant = garde;
+            p.affiche = garde;
             //if (garde) // je les mets tous pour créer index complet, tri plus lourd évidemment, à tester
-            parcheminsATrier.push([i, valeur]);
+            parcheminsATrier.push([id, valeur]);
         }
 
         if (type == AU_MOINS) parcheminsATrier.sort((v1, v2) => (v2[1] - v1[1])); // TODO tri secondaire prédéfini, par exemple tours, dégats, ...
         else if (type == AU_PLUS) parcheminsATrier.sort((v1, v2) => (v1[1] - v2[1]));
         this.index = parcheminsATrier.map(x => x[0]);
 
-        this.afficherParcheminsGardes();
-        //this.viderTableParchemins();
-        //for (let i = 0; i < parcheminsATrier.length; i++) {
-        //    this._afficherParchemin(parcheminsATrier[i][0], i);
-        //}
+        this.afficherParcheminsAdequats();
     }
 
     // volontaire ici aussi d'appeler et d'afficher un à un petit à petit dans la dom,
     // plus lourd au total mais visuellement plus direct si beaucoup de parchemins.
-    _afficherParchemin(parchemin, position) {
+    // REMARQUE : crée mais n'affiche pas
+    _genererParcheminHtml(parchemin, position) {
         parchemin.creerLignes(this.table, position);
     }
 
     nettoyerParchemins() {
-        const parcheminsASupprimer = document.getElementById('parcheminsASupprimer').value.replace(/\s/g, "").split(','); //enlève les blancs et espaces
-        for (const p of this.parchemins) {
-            if (parcheminsASupprimer.includes(p.id)) p.supprimerParchemin();
+        const idParcheminsASupprimer = document.getElementById('parcheminsASupprimer').value.replace(/\s/g, "").split(','); //enlève les blancs et espaces
+        for (const id of  idParcheminsASupprimer) {
+            if ( id in this.parchemins) this.parchemins[id].changerQualite(QUALITE_MAUVAIS);
         }
     }
 
-    afficherRecapitulatif() {
-        const htmlParcheminsModifies = [];
-        const htmlParcheminsNonModifies = [];
-        const parcheminsIdModifies = [];
-        const parcheminsIdSupprimes = [];
 
-        for (let i = 0; i < this.index.length; i++) {
-            const p = this.parchemins[this.index[i]];
-            if (!p.potentiellementInteressant) {
-                parcheminsIdSupprimes.push(p.id);
-            }
-            else {
+    afficherRecapitulatif() {
+
+        if(this.boutonAfficherRecapitulatif.dataset.affiche === "oui") {
+            this.boutonAfficherRecapitulatif.dataset.affiche = "non";
+            this.boutonAfficherRecapitulatif.innerHTML = "Afficher Récapitulatif";
+            this.texteRecapitulatif.innerText = "";
+        }
+        else {
+            this.boutonAfficherRecapitulatif.dataset.affiche = "oui";
+            this.boutonAfficherRecapitulatif.innerText = "Effacer Récapitulatif";
+
+            const parcheminsIdBons = [];
+            const parcheminsHtmlBons = [];
+            const parcheminsIdMauvais = [];
+            const parcheminsHtmlAutres = [];
+
+            function preparerHtml(p) {
                 const cochages = p.cochagesGlyphes;
                 let cochagesTexte = "grattages : aucun";
-                if (cochages.includes(1))  cochagesTexte = "<strong>grattages : " + cochages.map((x, i) => (Boolean(x) ? (i + 1) : '')).join(" ") + "</strong>";
-                const html = `<p><strong>${p.id}</strong> - ${p.nom} <em>${p.effetDeBaseTexte}</em> : ${cochagesTexte} => ${p.effetTotalHtml}</p>`;
-
                 if (cochages.includes(1)) {
-                    htmlParcheminsModifies.push(html);
-                    parcheminsIdModifies.push(p.id);
+                    cochagesTexte = "<strong>grattages : " + cochages.map((x, i) => (Boolean(x) ? (i + 1) : '')).join(" ") + "</strong>";
                 }
-                else htmlParcheminsNonModifies.push(html);
+                return `<p><strong>${p.id}</strong> - ${p.nom} <em>${p.effetDeBaseTexte}</em> : ${cochagesTexte} => ${p.effetTotalHtml}</p>`;
             }
+
+            for (const id of this.index) {
+                if (this.parchemins[id].qualite === QUALITE_BON) {
+                    parcheminsIdBons.push(id);
+                    parcheminsHtmlBons.push(preparerHtml(this.parchemins[id]));
+                }
+                else if (this.parchemins[id].qualite === QUALITE_MAUVAIS) {
+                    parcheminsIdMauvais.push(id);
+                }
+                else {
+                    parcheminsHtmlAutres.push(preparerHtml(this.parchemins[id]));
+                }
+            }
+
+            let reponse = '<p><strong style="color:darkgreen">Parchemins \"bons\" :</strong> ' + (parcheminsIdBons.length ? parcheminsIdBons.join(', ') : 'aucun') + '</p>';
+            reponse += '<p><strong style="color:orangered">Parchemins \"mauvais\" :</strong> ' + (parcheminsIdMauvais.length ? parcheminsIdMauvais.join(', ') : 'aucun') + '</p>';
+            reponse += '<p><strong style="color:darkgreen">Détails parchemins \"bons\" :</strong> ' + (parcheminsHtmlBons.length ? parcheminsHtmlBons.join('') : 'aucun') + '</p>';
+            reponse += '<p><strong style="color:dimgrey">Détails autres parchemins :</strong> ' + (parcheminsHtmlAutres.length ? parcheminsHtmlAutres.join('') : 'aucun') + '</p>';
+
+            this.texteRecapitulatif.innerHTML = reponse;
         }
-
-        let reponse = '<p><strong style="color:darkgreen">Parchemins cochés :</strong> ' + (parcheminsIdModifies.length ? parcheminsIdModifies.join(', ') : 'aucun') + '</p>';
-        reponse += '<p><strong style="color:orangered">Parchemins rejetés :</strong> ' + (parcheminsIdSupprimes.length ? parcheminsIdSupprimes.join(', ') : 'aucun') + '</p>';
-        reponse += '<p><strong style="color:darkgreen">Détails parchemins cochés :</strong> ' + (htmlParcheminsModifies.length ? htmlParcheminsModifies.join('') : 'aucun') + '</p>';
-        reponse += '<p><strong style="color:dimgrey">Détails parchemins inchangés :</strong> ' + (htmlParcheminsNonModifies.length ? htmlParcheminsNonModifies.join('') : 'aucun') + '</p>';
-
-        this.texteRecapitulatif.innerHTML = reponse;
     }
 
 
@@ -1228,6 +1410,7 @@ class OutilListerGrattage {
         this._attacherInterfaceSupprimerParchemins();
         this._attacherInterfaceRecapituler();
         this._attacherInterfaceFiltrer();
+        this._attacherCriteresAffichages()
         this._attacherTableParchemins();
 
         displayDebug("fin _preparerPageListe");
@@ -1245,51 +1428,52 @@ class OutilListerGrattage {
         const divBoutonsChargement = Createur.elem('div', { parent: this.zone, style: "margin:0vmin; padding:0.1vmin; border:solid 0px black" });
 
         Createur.elem('button', {                        // boutonSauvegarderLocalement
-            texte : 'Sauvegarder (dans navigateur)',
+            texte : 'Sauvegarder (navigateur)',
             style: "margin: 10px 5px 10px 10px; background-color: #0074D9", // bleu
             parent: divBoutonsChargement,
             events: [{nom: 'click', fonction: this.sauvegarderLocalement, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
         Createur.elem('button', {                       // boutonChargerLocalement
-            texte : 'Charger (depuis navigateur)',
-            style: "margin: 10px 20px 10px 5px",
+            texte : 'Charger (navigateur)',
+            style: "margin: 10px 5pxpx 10px 5px",
             parent: divBoutonsChargement,
             events: [{nom: 'click', fonction: this.chargerLocalement, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
-        Createur.elem('button', {                       // boutonChargerLocalement
+        Createur.elem('button', {                       // boutonImporterTexte
             texte : 'Importer (texte)',
             style: "margin: 10px 5px 10px 20px",
+            parent: divBoutonsChargement,
+            events: [{nom: 'click', fonction: this.validerImport, bindElement: this, param: [IMPORTER_REMPLACER]}],
+            classesHtml: ['mh_form_submit'] });
+
+        Createur.elem('button', {                       // boutonAjouterTexte
+            texte : 'Ajouter (texte)',
+            style: "margin: 10px 5px 10px 5px",
             parent: divBoutonsChargement,
             events: [{nom: 'click', fonction: this.validerImport, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
-        Createur.elem('button', {                       // boutonChargerLocalement
+        Createur.elem('button', {                       // boutonExporterLocalement
             texte : 'Exporter (texte)',
             style: "margin: 10px 20px 10px 5px",
             parent: divBoutonsChargement,
             events: [{nom: 'click', fonction: this.afficherExport, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
-        if (!STATIQUE) {
-            Createur.elem('button', {                        // boutonchargerDepuisHall
-                texte: 'Charger depuis votre inventaire (Hall)',
+
+        const boutonchargerDepuisHall = Createur.elem('button', {                        // boutonchargerDepuisHall
+                texte: 'Ajouter depuis votre inventaire (Hall)',
                 style: "margin: 10px 20px 10px 20px; background-color: #FF851B", //orange
                 parent: divBoutonsChargement,
                 events: [{nom: 'click', fonction: this.chargerDepuisHall, bindElement: this}],
                 classesHtml: ['mh_form_submit']
             });
-        }
-        else {
-            Createur.elem('button', {                        // boutonchargerDepuisHall
-                texte: 'Charger depuis votre inventaire (Hall)',
-                style: "margin: 10px 20px 10px 20px; background-color: #AAAAAA", // gris
-                parent: divBoutonsChargement,
-                attributs: [['disabled', 'true']],
-                events: [{nom: 'click', fonction: this.chargerDepuisHall, bindElement: this}],
-                classesHtml: ['mh_form_submit']
-            });
+
+        if (STATIQUE) {
+            boutonchargerDepuisHall.style.backgroundColor = " #AAAAAA"; // gris
+            boutonchargerDepuisHall.disabled = true;
         }
 
         this.zoneDateEnregistrement = Createur.elem('span', { style: "margin: 10px", parent: divBoutonsChargement });
@@ -1298,8 +1482,15 @@ class OutilListerGrattage {
     _attacherInterfaceSupprimerParchemins() {
         const divParcheminsASupprimer = Createur.elem('div', { parent: this.zone, style: "margin:1vmin; padding:1vmin; border:solid 1px black" });
 
-        this.boutonSupprimerParchemins = Createur.elem('button', {             // moué, this un peu facile pour faire paser un truc...
-            texte : 'Supprimer parchemins',
+        Createur.elem('button', {                       // boutonChargerLocalement
+            texte : 'Supprimer tous les parchemins',
+            style: "margin: 10px 20px 10px 5px",
+            parent: divParcheminsASupprimer,
+            events: [{nom: 'click', fonction: this.supprimerTousLesParchemins, bindElement: this}],
+            classesHtml: ['mh_form_submit'] });
+
+        this.boutonSupprimerParchemins = Createur.elem('button', {             // moué, this un peu facile pour faire passer un truc...
+            texte : 'Définir parchemins "mauvais"',
             style: "margin: 10px",
             parent: divParcheminsASupprimer,
             events: [{nom: 'click', fonction: this.nettoyerParchemins, bindElement: this}],
@@ -1307,19 +1498,21 @@ class OutilListerGrattage {
 
         Createur.elem('input', {              // si besoin de nom : const inputParcheminsASupprimer =
             id: 'parcheminsASupprimer',
-            attributs: [['type', 'text'], ['size', '120'], ['placeholder', 'Introduire dans ce champ les numéros des parchemins à supprimer, séparés par des virgules']],
+            attributs: [['type', 'text'], ['size', '120'], ['placeholder', 'Introduire dans ce champ les numéros des parchemins considérés comme "mauvais", séparés par des virgules']],
             parent: divParcheminsASupprimer });
     }
 
+    // TODO : doit d'abord afficher les bons, puis les neutres, puis la liste des id des mauvais (pas d'impact des caches ou coches)
     _attacherInterfaceRecapituler() {
-        const divBoutonRecapitulatif = Createur.elem('div', { parent: this.zone, style: "margin:1.5vmin; padding:1.5vmin; border:solid 1px black" });
+        const divBoutonRecapitulatif = Createur.elem('div', { parent: this.zone, style: "margin:1vmin; padding:1.5vmin; border:solid 1px black" });
 
-        Createur.elem('button', {               // si besoin de nom : const boutonAfficherRecapitulatif =
+        this.boutonAfficherRecapitulatif = Createur.elem('button', {               // si besoin de nom : const boutonAfficherRecapitulatif =
             texte : 'Afficher Récapitulatif',
-            style: "margin: 10px, width: " + window.getComputedStyle(this.boutonSupprimerParchemins).getPropertyValue("width"),
+            style: "margin: 5px; width: " + window.getComputedStyle(this.boutonSupprimerParchemins).getPropertyValue("width"),
             parent: divBoutonRecapitulatif,
             events: [{nom: 'click', fonction: this.afficherRecapitulatif, bindElement: this}],
-            classesHtml: ['mh_form_submit'] });
+            classesHtml: ['mh_form_submit'],
+            attributes: [["data-affiche", "non"]]});
 
         this.texteRecapitulatif = Createur.elem('div', {                // si besoin de nom : const zoneRecapitulatif =
             id: 'recapitulatif',
@@ -1330,6 +1523,8 @@ class OutilListerGrattage {
         this.texteRecapitulatif.innerHTML = "";
     }
 
+    // TODO séparer la durée des autres caractéristiques, elle est un peu à part.
+    // choisir si on veut voir les gardés, supprimés ou mis de côtés (encore à faire)
     _attacherInterfaceFiltrer() {
         // idée au départ de pemettre de trier et filtrer sur chaque carac, avec min et max...
         // ... mais est-ce bine nécessaire ? (Aller jusqu'à deux ou 3 caracs en même temps ?)
@@ -1343,23 +1538,32 @@ class OutilListerGrattage {
             </select>`;
 
         html +=
-            `<label style="margin:5px 0 5px 5px; padding:3px" for="puissanceRecherche">Puissance (-45 à 45) :</label>
-            <input style="margin:5px 5px 5px 0; padding:3px" id="puissanceRecherche" name="puissanceRecherche" type="number" 
-            min="-50" max="50" step="1" value="0" 
+            `<label style="margin:5px 0 5px 5px; padding:3px" for="puissanceRecherche"
+              title="Chaque points puissance a un impact sur l'effet. ATT, ESQ, PV => 1D3 / DEG, REG, PV, Vue, Duree, Zone => 1 / Tour => 15 min"
+            >Puissance (-45 à 45) :</label>
+            <input style="margin:5px 5px 5px 0; padding:3px; width: 4em" id="puissanceRecherche" name="puissanceRecherche" type="number" 
+            min="-45" max="45" step="1" value="0"
             title="Chaque points puissance a un impact sur l'effet. ATT, ESQ, PV => 1D3 / DEG, REG, PV, Vue, Duree, Zone => 1 / Tour => 15 min">`;
 
-        html += `<select style="margin:5px; padding:3px" id="caracRecherche" name="caracRecherche" >`;
+        html += `<select style="margin:5px; padding:3px" id="caracRecherche" name="caracRecherche" 
+          title=" Toutes caracs : signifie que l'outil va garder la carac la plus élevée (ou la plus basse), en dehors de la durée et de l'effet de zone, pour chaque parchemin. En cas d'égalité il en prend une au hasard.">`;
         html += `<option value="${TOUTES}">Toutes caracs</option>`;
         let copie = [...CARAC];
-        copie.splice(8,1);                          // sans efet de zone
+        copie.splice(9,1);                   // sans duree
+        copie.splice(8,1);                   // sans efet de zone
         for (const c of copie) {
             html += `<option value="${c.id}">${c.presentation}</option>`;
         }
         html += "</select>";
 
         html +=
+            `<label style="margin:5px 0 5px 20px; padding:3px" for="dureeRecherche">Durée minimum :</label>
+            <input style="margin:5px 20px 5px 0; padding:3px; width: 4em" id="dureeRecherche" name="dureeRecherche" type="number" 
+            min="0" max="45" step="1" value="0">`;
+
+        html +=
             `<input style="margin:5px 0 5px 5px; padding:3px" id="effetZoneObligatoire" name="effetZoneObligatoire" type="checkbox">
-              <label style="margin:5px 5px 5px 0; padding:3px" for="effetZoneObligatoire">Effet de zone possible</label>`
+              <label style="margin:5px 5px 5px 0; padding:3px" for="effetZoneObligatoire">Effet de zone possible</label>`;
 
         html +=
             `<button style="margin:5px; padding:3px" class="mh_form_submit" id="boutonRecherche">Filtrer et Trier</button>`;
@@ -1369,11 +1573,108 @@ class OutilListerGrattage {
         this.filtre.type = document.getElementById('typeRecherche');
         this.filtre.puissance = document.getElementById('puissanceRecherche');
         this.filtre.carac = document.getElementById('caracRecherche');
+        this.filtre.duree = document.getElementById('dureeRecherche');
         this.filtre.zone = document.getElementById('effetZoneObligatoire');
         this.filtre.bouton = document.getElementById('boutonRecherche');
         this.filtre.bouton.addEventListener('click', this.afficherParcheminsFiltres.bind(this));
+    }
 
-        // reste événements à gérer
+
+    _attacherCriteresAffichages() {
+
+        const divCriteresAffichages = Createur.elem('div', { parent: this.zone, style: "margin:1vmin; padding:1vmin; border:solid 0px black" });
+
+        // ---------- checkbox bons
+
+       this.affichagesBonsCheckbox = Createur.elem('input', {
+            id : "affichagesBonsCheckbox",
+            parent: divCriteresAffichages,
+            style: "margin:5px 0 5px 5px; padding:3px",
+            attributs : [["type", "checkbox"], ["checked", true], ["name", "affichagesBonsCheckbox"]],
+            events: [{nom: 'change', fonction: this.afficherSelonQualite, bindElement: this, param: [QUALITE_BON]}]
+        });
+
+        Createur.elem('label', {
+            texte : "Afficher les \"bons\" parchemins.",
+            parent: divCriteresAffichages,
+            style: "margin:5px 5px 5px 0; padding:3px",
+            attributs : [["for", "affichagesBonsCheckbox"]]
+        });
+        this.affichagesBonsCheckbox.checked = true;
+
+
+        // ---------- checkbox mauvais
+
+        this.affichagesMauvaisCheckbox = Createur.elem('input', {
+            id : "affichagesMauvaisCheckbox",
+            parent: divCriteresAffichages,
+            style: "margin:5px 0 5px 20px; padding:3px",
+            attributs : [["type", "checkbox"], ["checked", "false"], ["name", "affichagesMauvaisCheckbox"]],
+            events: [{nom: 'change', fonction: this.afficherSelonQualite, bindElement: this, param: [QUALITE_MAUVAIS]}]
+        });
+        this.affichagesMauvaisCheckbox.checked = false;
+
+        Createur.elem('label', {
+            texte : "Afficher les \"mauvais\" parchemins.",
+            parent: divCriteresAffichages,
+            style: "margin:5px 5px 5px 0; padding:3px",
+            attributs : [["for", "affichagesMauvaisCheckbox"]]
+        });
+
+
+        // ---------- checkbox deja gratté // Est-ce vraiment intéressant ? Qui a la priorité entre bon/mauvais ou déjà gratté ?
+        //
+        // this.affichagesDejaGratteCheckbox = Createur.elem('input', {
+        //     id : "affichagesDejaGratteCheckbox",
+        //     parent: divCriteresAffichages,
+        //     style: "margin:5px 0 5px 20px; padding:3px",
+        //     attributs : [["type", "checkbox"], ["checked", "false"], ["name", "affichagesDejaGratteCheckbox"]],
+        //     events: [{nom: 'change', fonction: this.afficherSelonQualite, bindElement: this, param: [QUALITE_GRATTE]}]
+        // });
+        // this.affichagesDejaGratteCheckbox.checked = false;
+        //
+        // Createur.elem('label', {
+        //     texte : "Afficher les parchemins déjà grattés.",
+        //     parent: divCriteresAffichages,
+        //     style: "margin:5px 5px 5px 0; padding:3px",
+        //     attributs : [["for", "affichagesDejaGratteCheckbox"]]
+        // });
+
+
+        // ---------- bouton rendre visible
+
+        Createur.elem('input', {                         // boutonRendreVisibleCaches
+            id : "boutonRendreVisibleCaches",
+            parent: divCriteresAffichages,
+            style: "margin:5px 0 5px 20px; padding:3px", // background-color: #a8b6bf
+            attributs : [["type", "button"], ["name", "boutonRendreVisibleCaches"], ["value", "Rendre visibles les parchemins \"cachés\""]],
+            events: [{nom: 'click', fonction: this.rendreVisibleCaches, bindElement: this}],
+            classesHtml: ['mh_form_submit']
+        });
+    }
+
+    rendreVisibleCaches() {
+        for (const id in this.parchemins) {
+            if (this.parchemins[id].qualite === QUALITE_NEUTRE) /// hm... devrait-on pouvoir cachee un bon alors que "bons visibles" est coché ?
+                if (!this.parchemins[id].affiche)
+                    this.parchemins[id].afficherParchemin();
+        }
+    }
+
+    // TODO à méditer : est-ce ok ou non de cacher les bons ou mauvais en jouant en parallèle sur l'aspect caché temporairement ?
+    afficherSelonQualite(qualiteConcernee) {
+        const valeurCheckbox = ((qualiteConcernee === QUALITE_BON) ? this.affichagesBonsCheckbox.checked : this.affichagesMauvaisCheckbox.checked );
+
+        for (const id in this.parchemins) {
+            if (this.parchemins[id].qualite === qualiteConcernee) {
+                if (valeurCheckbox) {
+                    this.parchemins[id].afficherParchemin();
+                }
+                else {
+                    this.parchemins[id].cacherParchemin();
+                }
+            }
+        }
     }
 
     _attacherTableParchemins() {
@@ -1386,20 +1687,24 @@ class OutilListerGrattage {
     }
 
     // renvoie un objet sauvegarde
+    // attention array de parchemins et non un object
+    // TODO ne plus enregistrer l'indexe, le recréer au chargement. A la limite en précisant le critère (pour lorsqque remplacement par exemple)
     exporterParchemins() {
         const sauvegarde = {     // Sauvegarde pourrait avoir sa classe
             parchemins: [],
             index: this.index,
             dateEnregistrement: new Date().toLocaleString()
         };
-        for (const p of this.parchemins) {
+        for (const id in this.parchemins) {
+            const p = this.parchemins[id];
             let enregistrement = {
                 id: p.id,
                 nom: p.nom,
                 effetDeBaseTexte: p.effetDeBaseTexte,
                 glyphesNumeros: [],
                 glyphesCoches: [],
-                garde: p.potentiellementInteressant
+                affiche: p.affiche,
+                qualite : p.qualite
             };
             for(const g of p.glyphes) {
                 enregistrement.glyphesNumeros.push(g.numero);
@@ -1411,19 +1716,29 @@ class OutilListerGrattage {
     }
 
     // reçoit un objet sauvergarde
-    importerParchemins(sauvegarde) {
-        this.parchemins = [];
+    importerParchemins(sauvegarde, critereCompleter=IMPORTER_COMPLETER) {
+
+        if (critereCompleter === IMPORTER_REMPLACER) {
+            this.parchemins = {};
+            this.index = [];
+        }
+        else {
+            if (!(this.parchemins)) { // s'il n'y a rien on crée... possible ? :)
+                this.parchemins = {};
+                this.index = [];
+            }
+        }
 
         if (sauvegarde.dateEnregistrement) this.zoneDateEnregistrement.innerText = "Date de la sauvegarde : " + sauvegarde.dateEnregistrement;
         for (const enregistrement of sauvegarde.parchemins) {
-            this.parchemins.push(ParcheminEnPage.creerParchemin(enregistrement));
+            this.parchemins[enregistrement.id] = ParcheminEnPage.creerParchemin(enregistrement);
         }
-        this.index = sauvegarde.index;
+        this.construireIndex();
     }
 
-    importerParcheminsEtAfficher(sauvegarde) {
-        this.importerParchemins(sauvegarde)
-        this.afficherParcheminsGardes();
+    importerParcheminsEtAfficher(sauvegarde, critereCompleter) {
+        this.importerParchemins(sauvegarde, critereCompleter);
+        this.afficherParcheminsAdequats();
         this.viderTexteRecapitulatif();
     }
 
@@ -1437,6 +1752,15 @@ class OutilListerGrattage {
         }
     }
 
+    supprimerTousLesParchemins() {
+        if (confirm("Désirez-vous effacer les parchemins en cours ?")) {
+            this.parchemins = {};
+            this.index = [];
+            this.incomplets = [];
+            this.afficherParcheminsAdequats();
+        }
+    }
+
     sauvegarderLocalement() {
         const sauvegardeTexte = JSON.stringify(this.exporterParchemins());
         console.log(sauvegardeTexte); // normalement il y a l'export pour ça...
@@ -1444,13 +1768,13 @@ class OutilListerGrattage {
         alert("Etat sauvegardé.");
     }
 
-    validerImport() {
+    validerImport(critereCompleter) {
         const introduit = prompt ("Collez l'enregistrement (Ctrl+V) à importer :", "");
         let sauvegarde;
         if (introduit) {
             try {
                 sauvegarde = JSON.parse(introduit);
-                this.importerParcheminsEtAfficher(sauvegarde);
+                this.importerParcheminsEtAfficher(sauvegarde, critereCompleter);
                 alert("Enregistrement importé.");
             }
             catch (e) {
@@ -1578,17 +1902,22 @@ if (window.location.pathname == "/mountyhall/MH_Play/Play_equipement.php") {
 
 //--------------------- parchemins hardcodes --------------//
 
-const SAUVEGARDE_0 =
-    `{"parchemins":[{"id":"4986515","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +4 | TOUR : -120 min","glyphesNumeros":["94488","87335","38177","16672","29969","57632","56613","16672","72997","72999"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true},` +
-    `{"id":"8505213","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +4 D3 | DEG : +4 | Vue : -4","glyphesNumeros":["95521","75049","90396","26924","26902","97553","46369","85285","9509","78100"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true},` +
-    `{"id":"10769725","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["61722","45336","61720","95501","85269","11529","26892","61720","88344","23833"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true},` +
-    `{"id":"10789472","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["58649","99613","91417","62737","49416","71944","58649","3337","32033","60697"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true}],` +
-    `"index":[0,1,2,3],` +
-    `"dateEnregistrement":"11/06/2019 à 11:20:42"}`;
+// 4 parchos
+const SAUVEGARDE_4 =
+    `{"parchemins":[{"id":"4986515","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +4 | TOUR : -120 min","glyphesNumeros":["94488","87335","38177","16672","29969","57632","56613","16672","72997","72999"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8505213","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +4 D3 | DEG : +4 | Vue : -4","glyphesNumeros":["95521","75049","90396","26924","26902","97553","46369","85285","9509","78100"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10769725","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["61722","45336","61720","95501","85269","11529","26892","61720","88344","23833"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10789472","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["58649","99613","91417","62737","49416","71944","58649","3337","32033","60697"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0}],` +
+    `"index":["4986515","8505213","10769725","10789472"],` +
+    `"dateEnregistrement":"14/06/2019 à 12:55:57"}`;
 
+// long 172 parchos
 const SAUVEGARDE =
-    `{"parchemins":[{"id":"985004","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["85261","75033","30984","102664","88332","65800","67848","53512","83213","11537"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1066280","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["87309","79137","10508","23817","15633","83213","58633","92428","26892","92428"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1157110","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["12552","37152","18704","79117","79117","88332","52493","90380","89357","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1207438","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["83213","88332","76040","78104","64801","73992","12552","32041","89357","7433"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1252192","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["42249","9489","23825","88332","77073","10504","67856","72977","87309","92456"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1499639","nom":"Rune Explosive","effetDeBaseTexte":"PV : -8 D3 | Effet de Zone","glyphesNumeros":["66839","96532","62753","63776","10520","33036","17691","50443","68897","34081"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1537124","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["85265","84236","78092","68873","88332","75021","88332","74016","55564","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1650257","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["21773","85261","72973","44297","46345","86284","48417","84236","9485","47384"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1665216","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["65808","40233","90380","57616","30992","61704","40201","92436","79145","88328"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1696600","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["58637","89357","86284","36121","92428","81165","72973","16656","86284","1289"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1751631","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["29969","4368","5393","80136","83213","84236","73996","90380","3341","24844"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1762370","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["12552","85261","84236","26888","70921","62729","58641","55560","90380","65816"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1802429","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["8460","21773","55584","9489","57608","87309","85261","92428","61704","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1811720","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["102664","11561","86284","88332","15625","77069","86284","24844","7437","44297"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1971170","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["64785","82200","87309","28940","46345","90380","88332","54537","88332","4364"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"1976190","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["30984","35080","78088","87309","37136","53512","64777","84236","87309","62729"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2036628","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["71968","100632","79121","70921","61704","96520","46369","29985","43304","78096"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2101336","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["92436","29961","83213","35088","96544","64785","30992","53512","52521","15657"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2204391","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["34081","13577","99597","64777","38161","56617","52489","69896","35080","43272"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2234171","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["91401","61704","90380","89357","62753","9485","26892","89357","89357","10512"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2318670","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["90376","73996","79117","90380","42273","83213","90380","12552","59660","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2444706","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["18696","89357","72969","68873","85261","85261","8456","47392","86288","77065"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2628359","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["57608","9485","29965","90380","36105","86284","58633","86284","86284","9481"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2703518","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["4368","77073","81177","39176","51464","19737","90380","91409","87309","81169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2812407","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["52493","46345","78092","89357","82188","88332","83213","45344","93481","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2855106","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["10516","88340","15629","84244","100620","12560","53528","26900","36113","15641"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2894767","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["72977","32033","90380","88332","4360","78088","88332","35080","47400","82184"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2948855","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +4 | TOUR : -120 min","glyphesNumeros":["52513","19729","74020","53542","53544","21769","102688","87335","77093","87313"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2969093","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["18700","46353","83223","86294","11561","76052","74004","98568","52501","67880"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2976946","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["89357","87309","55560","5389","65816","87309","32009","12552","28940","86284"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2994249","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["12552","19753","83213","83213","87309","24844","89357","5389","54537"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"2997855","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["99597","46345","44313","61704","85261","88332","56585","55560","97561","79121"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3051605","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["80144","90380","38169","28944","71952","54537","92436","81161","32009","39208"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3065537","nom":"Plan Génial","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | TOUR : -30 min","glyphesNumeros":["57616","83221","81173","4380","25879","99593","8460","16656","83221","36117"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3069048","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["88332","95497","19745","56585","16656","46353","74000","85261","81169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3117592","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["78100","88342","55572","1297","74006","41228","96520","73992","84244","76040"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3214279","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["25873","45320","56585","7457","70929","1297","83213","34065","49440","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3232083","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["54537","86284","90380","30984","57608","65800","90380","62729","36121","86280"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3661255","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["21769","87309","24844","88332","99625","8460","80136","85261","59656","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3734306","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["59660","83213","83217","43288","84236","86284","76044","82188","84236","91401"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"3971383","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["65800","86284","29961","87313","92428","88332","80136","66825","52489","61720"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4139593","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["94472","27917","7437","76044","50457","85261","86312","83213","92428","57608"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4156354","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["56601","83241","22796","3341","76044","85261","68873","25889","92428","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4197051","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["98584","88340","75021","26900","6440","87317","18728","8468","12560","48397"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4282857","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["87317","69912","26908","44309","57616","94480","55584","5397","97549","92436"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4296956","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["79121","99625","5409","74000","22796","19729","85269","23825","64777"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4374936","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["89377","85261","22792","85261","86284","35080","13609","66825","59656","64777"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4425946","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["71948","69920","83221","42253","68881","6428","81161","89365","25877","98600"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4437232","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["84236","21773","75021","28952","43304","90380","57608","4364","59680","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4486972","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["88340","84244","82188","14624","80144","18700","18720","8468","58649","26900"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4527905","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["89357","3337","76040","46345","75017","33032","87309","81193","92428","83225"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4534394","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -4 D3 | TOUR : +120 min","glyphesNumeros":["85257","45336","77089","12576","14618","81185","58633","50449","97553"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4640911","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["92428","85261","89357","37144","88352","59656","46345","88332","26892"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4867398","nom":"Plan Génial","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | TOUR : -30 min","glyphesNumeros":["77077","24852","86296","23825","47372","27917","85269","92456","89357","4374"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4897292","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["51464","86292","12560","77073","5393","7465","36109","77073","7457","50449"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4951251","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["86284","89357","73996","84236","90380","81165","90400","56589","68873","90376"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"4986515","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +4 | TOUR : -120 min","glyphesNumeros":["94488","87335","38177","16672","29969","57632","56613","16672","72997","72999"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5081716","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -12 | Effet de Zone","glyphesNumeros":["53528","88340","46369","36137","15633","61728","11561","97555","71952","61728"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5183258","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["90388","20744","84248","56585","74000","87321","78096","88332","46353","8464"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5183266","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["87309","90380","86284","25869","91401","53512","63768","8460","8456","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5185325","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["4372","92456","74008","26900","79117","102672","55592","33036","90388","88340"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5234962","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["59656","88332","98576","89357","7437","92428","90380","24844","12552","61712"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5258132","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["67848","78092","87309","92428","42249","55564","57608","72973","85261","85261"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5302921","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["64777","12552","65800","87321","30984","93481","55560","85261","89357","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5324554","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["25869","12560","85269","60685","8488","26916","3357","83221"],"glyphesCoches":[0,0,0,0,0,0,0,0],"garde":true },{"id":"5345706","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["71944","86304","37144","9513","38169","86288","23817","95497","99597","67848"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5581987","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -3 D3 | TOUR : +90 min","glyphesNumeros":["21801","85257","76056","7449","93473","36113","79129","80152","42249","70945"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5611560","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["65800","68873","84240","74016","98572","9481","29961","45352","64777","49424"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5642897","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["83213","14624","60681","60681","100640","86284","61704","91401","26920","101645"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5648709","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["71952","47368","24864","97549","23825","3353","82216","66833","90384"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5837689","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["83225","66825","75041","91401","100620","44305","14624","90384","67848","42281"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5849294","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["91401","48401","78088","83241","84236","87309","10504","90380","74008","73992"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5879313","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["24856","70937","15641","71944","10528","84236","20744","37136","53520","102680"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5904897","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["81161","72969","7433","88332","47368","73992","85261","68873","14608","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"5999154","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -4 D3 | TOUR : +120 min","glyphesNumeros":["72995","6412","85257","33032","9513","54569","13577","72993","68897","13609"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6106904","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["90380","92428","79121","22824","9489","67848","45320","77073","46353"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6118189","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +3 D3 | DEG : +3 | Vue : -3","glyphesNumeros":["92428","23833","82188","39188","96536","6428","60685","86300","85273","26908"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6147287","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["62737","5385","55560","22824","70937","90380","42257","1305","28952","79121"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6163594","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["63756","33064","26900","46353","47376","88340","9493","79125","64793","90396"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6167514","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["88340","100632","70945","91409","8480","73996","5397","90388","44301","26900"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6167879","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["37152","65800","77097","8488","97549","67848","46345","85257","63752","56609"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6215696","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["90376","88340","91409","84244","6420","38157","18700","89353","24852","38169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6241166","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["70929","71952","98572","6440","88328","80144","86280","20744","49416","37160"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6325216","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["27917","77069","72969","84236","15633","4364","5409","57608","84236","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6351525","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["56601","69904","45352","63760","84240","101653","72969","14600","68881","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6377165","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["52489","90380","86284","66825","57608","66825","83213","25873","31016","29961"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6405324","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["78088","88332","85261","1289","40201","90380","29969","9481","84264","76040"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6511733","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["39176","85269","55568","12560","88336","54545","61712","75017","43304","96524"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6574826","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["73001","91425","51480","29985","97553","86304","51464","78120","59656","66849"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6591288","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["12560","21781","77079","52503","88352","75037","90388","22808","87317","5393"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6616005","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["83221","29973","6428","17677","83213","69896","84244","89369","46353","87337"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6649524","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["1297","42253","67880","53520","72977","75031","86292","76054","56597","85269"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6719427","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["84236","22792","84236","83213","29965","5389","91401","53536","54537","86284"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6742320","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["24872","90380","21773","22816","91401","82188","90380","6412","92428","78088"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6816337","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["85261","85261","86312","76072","80144","77073","30984","3345","50441","81169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6852969","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["31000","86292","56589","40213","26900","47400","64793","4372","12560","88348"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6864349","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["70945","55584","78112","65816","1313","61736","78096","39192","26912","60681"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6929109","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["68873","85261","75021","89357","88332","86280","77073","88332","81165","54541"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6933746","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +4 D3 | DEG : +4 | Vue : -4","glyphesNumeros":["22820","98584","88356","13597","60695","80160","6436","37144","29973","98568"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6946179","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["90408","67848","59656","66825","90380","89357","30984","83213","1289","42249"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"6963736","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -3 D3 | TOUR : +90 min","glyphesNumeros":["16648","96528","78104","12568","18704","79113","9497","74008","60689","5385"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7026114","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["26892","73996","7437","12552","96544","33048","24848","92428","85261","92428"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7083001","nom":"Rune Explosive Gribouillé","effetDeBaseTexte":"DEG : +4 | REG : -4 | Vue : -5 | PV : -2 D3 | TOUR : -15 min | Effet de Zone","glyphesNumeros":["102664","101645","50449","49424","54569","71944","70921"],"glyphesCoches":[0,0,0,0,0,0,0],"garde":true },{"id":"7091909","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["81169","42249","5393","75025","88332","54561","50441","35088","26888","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7098148","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["92428","62753","57608","76044","52493","11529","84236","88332","88332","73996"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7144573","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["26888","86284","81169","77073","23825","44297","86284","3345","85273","54545"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7169823","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["6408","88332","48417","56601","92428","9481","57608","85261","75017","78088"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7190229","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +5 | TOUR : -150 min","glyphesNumeros":["48393","99601","35112","45328","11529","76078","47384","55596","81199","24864"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7190333","nom":"Rune Explosive qui fait mal","effetDeBaseTexte":"PV : -6 D3 | Effet de Zone","glyphesNumeros":["96532","61712","36109","49416","95513","67864","69912","77073","46361","72985"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7202670","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["98600","85261","26892","90380","79117","90380","65816","35080","51472"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7223318","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -3 D3 | TOUR : +90 min","glyphesNumeros":["74008","11537","53520","92424","12568","78104","60689","52505","9481","9497"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7255967","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["58633","92428","102672","78096","50441","81169","65832","53528","5393","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7394874","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["63768","88340","93473","15633","6424","48393","100632","92428","23825","27921"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7396379","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["84236","89357","16680","81169","74000","18696","29977","10512","68881","97545"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7416556","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["70945","91425","76048","25865","49432","5409","62753","38153","61704","25889"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7464974","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["96552","55560","63752","22792","85261","88332","70921","17689","1289","85261"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7521840","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -5 D3 | TOUR : +150 min","glyphesNumeros":["39184","79113","85257","91433","8490","16672","21785","59664","58649","81193"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7577744","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["85261","26888","87309","68873","62729","77089","65800","53512","7457","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7800041","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["30984","54545","84236","101653","96552","23825","71960","10528","67856","67856"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"7851999","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["87337","62761","99601","101645","33032","91401","62729","25897","67848","4384"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8053508","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["4364","18704","78092","91401","90380","28968","85261","90380","24844","52513"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8069613","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["76044","30988","77097","85261","21785","102664","88332","89357","49424"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8299385","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["88332","92432","61704","72993","56585","91401","52489","94476","88332","52489"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8330640","nom":"Rune Explosive","effetDeBaseTexte":"PV : -6 D3 | Effet de Zone","glyphesNumeros":["99593","92432","8488","98572","70937","80152","71960","75025","45336","20760"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8346496","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["83213","30984","9489","82192","21777","91409","75025","87309","99593","90392"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8355862","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["65824","83213","78092","73996","92428","85261","87309","60685","68873","38185"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8363549","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +3 | TOUR : -90 min","glyphesNumeros":["75039","86284","101665","49432","56605","75037","100632","33040","12568","87327"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8364791","nom":"Rune Explosive","effetDeBaseTexte":"PV : -10 D3 | Effet de Zone","glyphesNumeros":["5409","85273","57640","8464","96520","50465","30992","97549","66857","71976"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8366258","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["82188","70945","49432","89357","90380","26892","26920","84236","35080"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8368581","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -15 | Effet de Zone","glyphesNumeros":["61730","61704","43304","61736","7465","23849","61736","88340","89385"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8369959","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["85265","69904","46353","72993","64785","34061","29961","79113","29993","96532"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8436688","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["84244","45336","78100","87317","13601","78102","91409","59672","53526","45324"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8457409","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["84236","61708","92428","87309","81165","88332","35080","60697","82188"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8505213","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +4 D3 | DEG : +4 | Vue : -4","glyphesNumeros":["95521","75049","90396","26924","26902","97553","46369","85285","9509","78100"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8505214","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["90388","97577","54545","101653","52499","46353","29969","54545","78092"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8508639","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["27921","25865","48393","83221","26900","51468","57616","5397","88340","4364"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8512743","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["71976","93449","32009","67856","55560","70929","37132","92424","102672","96532"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8539755","nom":"Rune Explosive","effetDeBaseTexte":"PV : -8 D3 | Effet de Zone","glyphesNumeros":["101653","8474","62753","59658","83213","39184","78102","51480","68897","66849"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8554783","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["70937","68889","95497","71976","55560","28952","81169","86280","70921","41224"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8588074","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["94472","98572","54545","68881","54549","85271","82196","76054","90400","86292"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8621576","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["84244","72977","85257","32009","9497","49416","77073","45320","11533","46353"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8687025","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["43288","74006","84246","83221","64777","102672","8460","53524","74004","84256"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8731834","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["52497","87317","26896","101645","10504","102672","61712","56593","79137","65824"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8781310","nom":"Rune des Foins Gribouillé","effetDeBaseTexte":"DEG : +4 | Vue : -1 | PV : -12 D3 | Armure : +4","glyphesNumeros":["64809","62729","84236","86284","58633","62729","46345","65832","84236"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8786719","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["80144","100620","85269","58641","29969","69896","61712","90384","101649","54545"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8788290","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["67848","83213","91401","52489","88332","51472","85261","98592","62729","29961"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8856313","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["18712","6432","58633","61704","52513","64777","12552","90400","67848","96524"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8858811","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["96536","84236","70921","69904","68873","30984","92428","92428","62729","61704"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"8980203","nom":"Idées Confuses Gribouillé","effetDeBaseTexte":"ATT : -5 D3 | REG : -5 | Vue : -3 | TOUR : +75 min | Effet de Zone","glyphesNumeros":["20752","101641","61720","74008","50473","9513","90396","57640"],"glyphesCoches":[0,0,0,0,0,0,0,0],"garde":true },{"id":"9033982","nom":"Traité de Clairvoyance Gribouillé","effetDeBaseTexte":"Vue : -6 | TOUR : -210 min","glyphesNumeros":["77101","91433","60697","59688","60719","77103","60697"],"glyphesCoches":[0,0,0,0,0,0,0],"garde":true },{"id":"9136783","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["1297","18696","88340","71976","98592","66829","50445","27925","6420","87317"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9137351","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["63760","60681","24848","70929","29985","87305","23841","48409","20768","66849"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9175415","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["67848","61704","80136","77081","100620","90380","52489","87309","61704","72985"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9216288","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["67848","27945","65824","93453","71944","88336","21793","1289","67880","100632"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9217677","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["88332","21769","102664","60681","67848","92428","87309","26920","41240","63752"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9223996","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["84236","1289","66857","86284","21769","55560","62729","62729","33032","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9308040","nom":"Yeu'Ki'Pic Gribouillé","effetDeBaseTexte":"Vue : -6 | PV : +6 D3 | Effet de Zone","glyphesNumeros":["56593","54545","89377","51464","95509","89377","12560","54545","85269"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9358284","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["92428","8464","27921","75033","89353","61704","70921","71952","80144","92436"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9373620","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["18712","86284","54537","71944","70921","86284","81193","85261","30984","91401"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9508985","nom":"Rune Explosive","effetDeBaseTexte":"PV : -10 D3 | Effet de Zone","glyphesNumeros":["92448","97561","13593","53544","70953","71976","21769","100620","12584","44305"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9536162","nom":"Plan Génial","effetDeBaseTexte":"ATT : +5 D3 | DEG : +5 | TOUR : -75 min","glyphesNumeros":["7437","74000","79129","88328","45320","24848","91433","81199","21807","89361"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9548359","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +3 | TOUR : -90 min","glyphesNumeros":["28968","81181","91417","58653","65812","83213","48409","33036","90414","78088"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9614231","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["78104","55560","65800","98568","62745","15625","1305","29977","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"garde":true },{"id":"9614246","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["43288","60681","86312","87309","56585","56585","68873","61704","100620","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"10406342","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["55576","66825","88332","20744","51464","5393","86284","74000","81169","68881"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"10406560","nom":"Rune des Cyclopes Gribouillé","effetDeBaseTexte":"ATT : +5 D3 | DEG : +6 | Vue : -1 | Armure : +3 | Effet de Zone","glyphesNumeros":["57640","26924","37150","61742","92452","30990","6444"],"glyphesCoches":[0,0,0,0,0,0,0],"garde":true },{"id":"10453894","nom":"Plan Génial","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | TOUR : -30 min","glyphesNumeros":["27933","25873","12560","17681","98592","44329","90398","3349","83213","70933"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"10542064","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["52497","88340","32017","30992","47368","100640","54553","61720","80152","10504"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"10667508","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +5 D3 | DEG : +5 | Vue : -5","glyphesNumeros":["66845","20760","100648","26924","6444","78088","80168","89381","86296","56607"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"10769725","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["61722","45336","61720","95501","85269","11529","26892","61720","88344","23833"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"10789472","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["58649","99613","91417","62737","49416","71944","58649","3337","32033","60697"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true },{"id":"11133231","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["79113","73992","84236","5385","76040","70921","34057","83213","23817","84236"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"garde":true }],` +
-    `"index":[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171],` +
-    `"dateEnregistrement":"11/06/2019 à 11:20:42"}`;
+    `{"parchemins":[{"id":"985004","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["85261","75033","30984","102664","88332","65800","67848","53512","83213","11537"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1066280","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["87309","79137","10508","23817","15633","83213","58633","92428","26892","92428"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1157110","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["12552","37152","18704","79117","79117","88332","52493","90380","89357","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1207438","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["83213","88332","76040","78104","64801","73992","12552","32041","89357","7433"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1252192","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["42249","9489","23825","88332","77073","10504","67856","72977","87309","92456"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1499639","nom":"Rune Explosive","effetDeBaseTexte":"PV : -8 D3 | Effet de Zone","glyphesNumeros":["66839","96532","62753","63776","10520","33036","17691","50443","68897","34081"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1537124","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["85265","84236","78092","68873","88332","75021","88332","74016","55564","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1650257","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["21773","85261","72973","44297","46345","86284","48417","84236","9485","47384"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1665216","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["65808","40233","90380","57616","30992","61704","40201","92436","79145","88328"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1696600","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["58637","89357","86284","36121","92428","81165","72973","16656","86284","1289"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1751631","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["29969","4368","5393","80136","83213","84236","73996","90380","3341","24844"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1762370","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["12552","85261","84236","26888","70921","62729","58641","55560","90380","65816"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1802429","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["8460","21773","55584","9489","57608","87309","85261","92428","61704","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1811720","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["102664","11561","86284","88332","15625","77069","86284","24844","7437","44297"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1971170","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["64785","82200","87309","28940","46345","90380","88332","54537","88332","4364"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"1976190","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["30984","35080","78088","87309","37136","53512","64777","84236","87309","62729"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2036628","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["71968","100632","79121","70921","61704","96520","46369","29985","43304","78096"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2101336","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["92436","29961","83213","35088","96544","64785","30992","53512","52521","15657"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2204391","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["34081","13577","99597","64777","38161","56617","52489","69896","35080","43272"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2234171","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["91401","61704","90380","89357","62753","9485","26892","89357","89357","10512"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2318670","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["90376","73996","79117","90380","42273","83213","90380","12552","59660","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2444706","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["18696","89357","72969","68873","85261","85261","8456","47392","86288","77065"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2628359","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["57608","9485","29965","90380","36105","86284","58633","86284","86284","9481"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2703518","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["4368","77073","81177","39176","51464","19737","90380","91409","87309","81169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2812407","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["52493","46345","78092","89357","82188","88332","83213","45344","93481","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2855106","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["10516","88340","15629","84244","100620","12560","53528","26900","36113","15641"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2894767","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["72977","32033","90380","88332","4360","78088","88332","35080","47400","82184"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2948855","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +4 | TOUR : -120 min","glyphesNumeros":["52513","19729","74020","53542","53544","21769","102688","87335","77093","87313"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2969093","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["18700","46353","83223","86294","11561","76052","74004","98568","52501","67880"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2976946","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["89357","87309","55560","5389","65816","87309","32009","12552","28940","86284"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2994249","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["12552","19753","83213","83213","87309","24844","89357","5389","54537"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"2997855","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["99597","46345","44313","61704","85261","88332","56585","55560","97561","79121"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3051605","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["80144","90380","38169","28944","71952","54537","92436","81161","32009","39208"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3065537","nom":"Plan Génial","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | TOUR : -30 min","glyphesNumeros":["57616","83221","81173","4380","25879","99593","8460","16656","83221","36117"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3069048","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["88332","95497","19745","56585","16656","46353","74000","85261","81169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3117592","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["78100","88342","55572","1297","74006","41228","96520","73992","84244","76040"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3214279","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["25873","45320","56585","7457","70929","1297","83213","34065","49440","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3232083","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["54537","86284","90380","30984","57608","65800","90380","62729","36121","86280"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3661255","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["21769","87309","24844","88332","99625","8460","80136","85261","59656","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3734306","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["59660","83213","83217","43288","84236","86284","76044","82188","84236","91401"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"3971383","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["65800","86284","29961","87313","92428","88332","80136","66825","52489","61720"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4139593","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["94472","27917","7437","76044","50457","85261","86312","83213","92428","57608"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4156354","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["56601","83241","22796","3341","76044","85261","68873","25889","92428","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4197051","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["98584","88340","75021","26900","6440","87317","18728","8468","12560","48397"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4282857","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["87317","69912","26908","44309","57616","94480","55584","5397","97549","92436"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4296956","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["79121","99625","5409","74000","22796","19729","85269","23825","64777"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4374936","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["89377","85261","22792","85261","86284","35080","13609","66825","59656","64777"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4425946","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["71948","69920","83221","42253","68881","6428","81161","89365","25877","98600"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4437232","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["84236","21773","75021","28952","43304","90380","57608","4364","59680","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4486972","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["88340","84244","82188","14624","80144","18700","18720","8468","58649","26900"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4527905","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["89357","3337","76040","46345","75017","33032","87309","81193","92428","83225"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4534394","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -4 D3 | TOUR : +120 min","glyphesNumeros":["85257","45336","77089","12576","14618","81185","58633","50449","97553"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4640911","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["92428","85261","89357","37144","88352","59656","46345","88332","26892"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4867398","nom":"Plan Génial","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | TOUR : -30 min","glyphesNumeros":["77077","24852","86296","23825","47372","27917","85269","92456","89357","4374"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4897292","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["51464","86292","12560","77073","5393","7465","36109","77073","7457","50449"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4951251","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["86284","89357","73996","84236","90380","81165","90400","56589","68873","90376"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"4986515","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +4 | TOUR : -120 min","glyphesNumeros":["94488","87335","38177","16672","29969","57632","56613","16672","72997","72999"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5081716","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -12 | Effet de Zone","glyphesNumeros":["53528","88340","46369","36137","15633","61728","11561","97555","71952","61728"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5183258","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["90388","20744","84248","56585","74000","87321","78096","88332","46353","8464"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5183266","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["87309","90380","86284","25869","91401","53512","63768","8460","8456","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5185325","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["4372","92456","74008","26900","79117","102672","55592","33036","90388","88340"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5234962","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["59656","88332","98576","89357","7437","92428","90380","24844","12552","61712"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5258132","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["67848","78092","87309","92428","42249","55564","57608","72973","85261","85261"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5302921","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["64777","12552","65800","87321","30984","93481","55560","85261","89357","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5324554","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["25869","12560","85269","60685","8488","26916","3357","83221"],"glyphesCoches":[0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5345706","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["71944","86304","37144","9513","38169","86288","23817","95497","99597","67848"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5581987","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -3 D3 | TOUR : +90 min","glyphesNumeros":["21801","85257","76056","7449","93473","36113","79129","80152","42249","70945"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5611560","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["65800","68873","84240","74016","98572","9481","29961","45352","64777","49424"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5642897","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["83213","14624","60681","60681","100640","86284","61704","91401","26920","101645"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5648709","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["71952","47368","24864","97549","23825","3353","82216","66833","90384"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5837689","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["83225","66825","75041","91401","100620","44305","14624","90384","67848","42281"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5849294","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["91401","48401","78088","83241","84236","87309","10504","90380","74008","73992"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5879313","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["24856","70937","15641","71944","10528","84236","20744","37136","53520","102680"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5904897","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["81161","72969","7433","88332","47368","73992","85261","68873","14608","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"5999154","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -4 D3 | TOUR : +120 min","glyphesNumeros":["72995","6412","85257","33032","9513","54569","13577","72993","68897","13609"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6106904","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["90380","92428","79121","22824","9489","67848","45320","77073","46353"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6118189","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +3 D3 | DEG : +3 | Vue : -3","glyphesNumeros":["92428","23833","82188","39188","96536","6428","60685","86300","85273","26908"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6147287","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["62737","5385","55560","22824","70937","90380","42257","1305","28952","79121"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6163594","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["63756","33064","26900","46353","47376","88340","9493","79125","64793","90396"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6167514","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["88340","100632","70945","91409","8480","73996","5397","90388","44301","26900"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6167879","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["37152","65800","77097","8488","97549","67848","46345","85257","63752","56609"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6215696","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["90376","88340","91409","84244","6420","38157","18700","89353","24852","38169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6241166","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["70929","71952","98572","6440","88328","80144","86280","20744","49416","37160"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6325216","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["27917","77069","72969","84236","15633","4364","5409","57608","84236","89357"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6351525","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["56601","69904","45352","63760","84240","101653","72969","14600","68881","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6377165","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["52489","90380","86284","66825","57608","66825","83213","25873","31016","29961"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6405324","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["78088","88332","85261","1289","40201","90380","29969","9481","84264","76040"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6511733","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["39176","85269","55568","12560","88336","54545","61712","75017","43304","96524"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6574826","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["73001","91425","51480","29985","97553","86304","51464","78120","59656","66849"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6591288","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["12560","21781","77079","52503","88352","75037","90388","22808","87317","5393"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6616005","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["83221","29973","6428","17677","83213","69896","84244","89369","46353","87337"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6649524","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["1297","42253","67880","53520","72977","75031","86292","76054","56597","85269"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6719427","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | Vue : -1","glyphesNumeros":["84236","22792","84236","83213","29965","5389","91401","53536","54537","86284"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6742320","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["24872","90380","21773","22816","91401","82188","90380","6412","92428","78088"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6816337","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["85261","85261","86312","76072","80144","77073","30984","3345","50441","81169"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6852969","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["31000","86292","56589","40213","26900","47400","64793","4372","12560","88348"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6864349","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["70945","55584","78112","65816","1313","61736","78096","39192","26912","60681"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6929109","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["68873","85261","75021","89357","88332","86280","77073","88332","81165","54541"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6933746","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +4 D3 | DEG : +4 | Vue : -4","glyphesNumeros":["22820","98584","88356","13597","60695","80160","6436","37144","29973","98568"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6946179","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["90408","67848","59656","66825","90380","89357","30984","83213","1289","42249"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"6963736","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -3 D3 | TOUR : +90 min","glyphesNumeros":["16648","96528","78104","12568","18704","79113","9497","74008","60689","5385"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7026114","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["26892","73996","7437","12552","96544","33048","24848","92428","85261","92428"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7083001","nom":"Rune Explosive Gribouillé","effetDeBaseTexte":"DEG : +4 | REG : -4 | Vue : -5 | PV : -2 D3 | TOUR : -15 min | Effet de Zone","glyphesNumeros":["102664","101645","50449","49424","54569","71944","70921"],"glyphesCoches":[0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7091909","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["81169","42249","5393","75025","88332","54561","50441","35088","26888","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7098148","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["92428","62753","57608","76044","52493","11529","84236","88332","88332","73996"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7144573","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["26888","86284","81169","77073","23825","44297","86284","3345","85273","54545"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7169823","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["6408","88332","48417","56601","92428","9481","57608","85261","75017","78088"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7190229","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +5 | TOUR : -150 min","glyphesNumeros":["48393","99601","35112","45328","11529","76078","47384","55596","81199","24864"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7190333","nom":"Rune Explosive qui fait mal","effetDeBaseTexte":"PV : -6 D3 | Effet de Zone","glyphesNumeros":["96532","61712","36109","49416","95513","67864","69912","77073","46361","72985"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7202670","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["98600","85261","26892","90380","79117","90380","65816","35080","51472"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7223318","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -3 D3 | TOUR : +90 min","glyphesNumeros":["74008","11537","53520","92424","12568","78104","60689","52505","9481","9497"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7255967","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["58633","92428","102672","78096","50441","81169","65832","53528","5393","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7394874","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["63768","88340","93473","15633","6424","48393","100632","92428","23825","27921"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7396379","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["84236","89357","16680","81169","74000","18696","29977","10512","68881","97545"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7416556","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["70945","91425","76048","25865","49432","5409","62753","38153","61704","25889"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7464974","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["96552","55560","63752","22792","85261","88332","70921","17689","1289","85261"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7521840","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -5 D3 | TOUR : +150 min","glyphesNumeros":["39184","79113","85257","91433","8490","16672","21785","59664","58649","81193"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7577744","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["85261","26888","87309","68873","62729","77089","65800","53512","7457","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7800041","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["30984","54545","84236","101653","96552","23825","71960","10528","67856","67856"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"7851999","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["87337","62761","99601","101645","33032","91401","62729","25897","67848","4384"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8053508","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["4364","18704","78092","91401","90380","28968","85261","90380","24844","52513"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8069613","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["76044","30988","77097","85261","21785","102664","88332","89357","49424"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8299385","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["88332","92432","61704","72993","56585","91401","52489","94476","88332","52489"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8330640","nom":"Rune Explosive","effetDeBaseTexte":"PV : -6 D3 | Effet de Zone","glyphesNumeros":["99593","92432","8488","98572","70937","80152","71960","75025","45336","20760"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8346496","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["83213","30984","9489","82192","21777","91409","75025","87309","99593","90392"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8355862","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["65824","83213","78092","73996","92428","85261","87309","60685","68873","38185"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8363549","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +3 | TOUR : -90 min","glyphesNumeros":["75039","86284","101665","49432","56605","75037","100632","33040","12568","87327"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8364791","nom":"Rune Explosive","effetDeBaseTexte":"PV : -10 D3 | Effet de Zone","glyphesNumeros":["5409","85273","57640","8464","96520","50465","30992","97549","66857","71976"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8366258","nom":"Plan Génial","effetDeBaseTexte":"ATT : +1 D3 | DEG : +1 | TOUR : -15 min","glyphesNumeros":["82188","70945","49432","89357","90380","26892","26920","84236","35080"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8368581","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -15 | Effet de Zone","glyphesNumeros":["61730","61704","43304","61736","7465","23849","61736","88340","89385"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8369959","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["85265","69904","46353","72993","64785","34061","29961","79113","29993","96532"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8436688","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["84244","45336","78100","87317","13601","78102","91409","59672","53526","45324"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8457409","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +1 | TOUR : -30 min","glyphesNumeros":["84236","61708","92428","87309","81165","88332","35080","60697","82188"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8505213","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +4 D3 | DEG : +4 | Vue : -4","glyphesNumeros":["95521","75049","90396","26924","26902","97553","46369","85285","9509","78100"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8505214","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["90388","97577","54545","101653","52499","46353","29969","54545","78092"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8508639","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["27921","25865","48393","83221","26900","51468","57616","5397","88340","4364"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8512743","nom":"Rune Explosive","effetDeBaseTexte":"PV : -4 D3 | Effet de Zone","glyphesNumeros":["71976","93449","32009","67856","55560","70929","37132","92424","102672","96532"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8539755","nom":"Rune Explosive","effetDeBaseTexte":"PV : -8 D3 | Effet de Zone","glyphesNumeros":["101653","8474","62753","59658","83213","39184","78102","51480","68897","66849"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8554783","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["70937","68889","95497","71976","55560","28952","81169","86280","70921","41224"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8588074","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["94472","98572","54545","68881","54549","85271","82196","76054","90400","86292"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8621576","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["84244","72977","85257","32009","9497","49416","77073","45320","11533","46353"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8687025","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +2 | TOUR : -60 min","glyphesNumeros":["43288","74006","84246","83221","64777","102672","8460","53524","74004","84256"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8731834","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["52497","87317","26896","101645","10504","102672","61712","56593","79137","65824"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8781310","nom":"Rune des Foins Gribouillé","effetDeBaseTexte":"DEG : +4 | Vue : -1 | PV : -12 D3 | Armure : +4","glyphesNumeros":["64809","62729","84236","86284","58633","62729","46345","65832","84236"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8786719","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -6 | Effet de Zone","glyphesNumeros":["80144","100620","85269","58641","29969","69896","61712","90384","101649","54545"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8788290","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["67848","83213","91401","52489","88332","51472","85261","98592","62729","29961"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8856313","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["18712","6432","58633","61704","52513","64777","12552","90400","67848","96524"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8858811","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["96536","84236","70921","69904","68873","30984","92428","92428","62729","61704"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"8980203","nom":"Idées Confuses Gribouillé","effetDeBaseTexte":"ATT : -5 D3 | REG : -5 | Vue : -3 | TOUR : +75 min | Effet de Zone","glyphesNumeros":["20752","101641","61720","74008","50473","9513","90396","57640"],"glyphesCoches":[0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9033982","nom":"Traité de Clairvoyance Gribouillé","effetDeBaseTexte":"Vue : -6 | TOUR : -210 min","glyphesNumeros":["77101","91433","60697","59688","60719","77103","60697"],"glyphesCoches":[0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9136783","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | Vue : -2","glyphesNumeros":["1297","18696","88340","71976","98592","66829","50445","27925","6420","87317"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9137351","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -4 | Vue : -1 | PV : -4 D3","glyphesNumeros":["63760","60681","24848","70929","29985","87305","23841","48409","20768","66849"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9175415","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["67848","61704","80136","77081","100620","90380","52489","87309","61704","72985"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9216288","nom":"Rune Explosive","effetDeBaseTexte":"PV : -2 D3 | Effet de Zone","glyphesNumeros":["67848","27945","65824","93453","71944","88336","21793","1289","67880","100632"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9217677","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["88332","21769","102664","60681","67848","92428","87309","26920","41240","63752"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9223996","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["84236","1289","66857","86284","21769","55560","62729","62729","33032","87309"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9308040","nom":"Yeu'Ki'Pic Gribouillé","effetDeBaseTexte":"Vue : -6 | PV : +6 D3 | Effet de Zone","glyphesNumeros":["56593","54545","89377","51464","95509","89377","12560","54545","85269"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9358284","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -2 | Vue : -1 | PV : -2 D3","glyphesNumeros":["92428","8464","27921","75033","89353","61704","70921","71952","80144","92436"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9373620","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["18712","86284","54537","71944","70921","86284","81193","85261","30984","91401"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9508985","nom":"Rune Explosive","effetDeBaseTexte":"PV : -10 D3 | Effet de Zone","glyphesNumeros":["92448","97561","13593","53544","70953","71976","21769","100620","12584","44305"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9536162","nom":"Plan Génial","effetDeBaseTexte":"ATT : +5 D3 | DEG : +5 | TOUR : -75 min","glyphesNumeros":["7437","74000","79129","88328","45320","24848","91433","81199","21807","89361"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9548359","nom":"Traité de Clairvoyance","effetDeBaseTexte":"Vue : +3 | TOUR : -90 min","glyphesNumeros":["28968","81181","91417","58653","65812","83213","48409","33036","90414","78088"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9614231","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -3 | Vue : -1 | PV : -4 D3","glyphesNumeros":["78104","55560","65800","98568","62745","15625","1305","29977","90380"],"glyphesCoches":[0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"9614246","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -3 | Effet de Zone","glyphesNumeros":["43288","60681","86312","87309","56585","56585","68873","61704","100620","83213"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10406342","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -2 D3 | TOUR : +60 min","glyphesNumeros":["55576","66825","88332","20744","51464","5393","86284","74000","81169","68881"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10406560","nom":"Rune des Cyclopes Gribouillé","effetDeBaseTexte":"ATT : +5 D3 | DEG : +6 | Vue : -1 | Armure : +3 | Effet de Zone","glyphesNumeros":["57640","26924","37150","61742","92452","30990","6444"],"glyphesCoches":[0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10453894","nom":"Plan Génial","effetDeBaseTexte":"ATT : +2 D3 | DEG : +2 | TOUR : -30 min","glyphesNumeros":["27933","25873","12560","17681","98592","44329","90398","3349","83213","70933"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10542064","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["52497","88340","32017","30992","47368","100640","54553","61720","80152","10504"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10667508","nom":"Rune des Cyclopes","effetDeBaseTexte":"ATT : +5 D3 | DEG : +5 | Vue : -5","glyphesNumeros":["66845","20760","100648","26924","6444","78088","80168","89381","86296","56607"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10769725","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["61722","45336","61720","95501","85269","11529","26892","61720","88344","23833"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"10789472","nom":"Yeu'Ki'Pic","effetDeBaseTexte":"Vue : -9 | Effet de Zone","glyphesNumeros":["58649","99613","91417","62737","49416","71944","58649","3337","32033","60697"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0},{"id":"11133231","nom":"Idées Confuses","effetDeBaseTexte":"ATT : -1 D3 | TOUR : +30 min","glyphesNumeros":["79113","73992","84236","5385","76040","70921","34057","83213","23817","84236"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0}],` +
+    `"index":["985004","1066280","1157110","1207438","1252192","1499639","1537124","1650257","1665216","1696600","1751631","1762370","1802429","1811720","1971170","1976190","2036628","2101336","2204391","2234171","2318670","2444706","2628359","2703518","2812407","2855106","2894767","2948855","2969093","2976946","2994249","2997855","3051605","3065537","3069048","3117592","3214279","3232083","3661255","3734306","3971383","4139593","4156354","4197051","4282857","4296956","4374936","4425946","4437232","4486972","4527905","4534394","4640911","4867398","4897292","4951251","4986515","5081716","5183258","5183266","5185325","5234962","5258132","5302921","5324554","5345706","5581987","5611560","5642897","5648709","5837689","5849294","5879313","5904897","5999154","6106904","6118189","6147287","6163594","6167514","6167879","6215696","6241166","6325216","6351525","6377165","6405324","6511733","6574826","6591288","6616005","6649524","6719427","6742320","6816337","6852969","6864349","6929109","6933746","6946179","6963736","7026114","7083001","7091909","7098148","7144573","7169823","7190229","7190333","7202670","7223318","7255967","7394874","7396379","7416556","7464974","7521840","7577744","7800041","7851999","8053508","8069613","8299385","8330640","8346496","8355862","8363549","8364791","8366258","8368581","8369959","8436688","8457409","8505213","8505214","8508639","8512743","8539755","8554783","8588074","8621576","8687025","8731834","8781310","8786719","8788290","8856313","8858811","8980203","9033982","9136783","9137351","9175415","9216288","9217677","9223996","9308040","9358284","9373620","9508985","9536162","9548359","9614231","9614246","10406342","10406560","10453894","10542064","10667508","10769725","10789472","11133231"],` +
+    `"dateEnregistrement":"14/06/2019 à 12:52:16"}`;
+
+// 1 parchos
+const SAUVEGARDE_1 =
+    `{"parchemins":[{"id":"985004","nom":"Rune des Foins","effetDeBaseTexte":"DEG : -1 | Vue : -1 | PV : -2 D3","glyphesNumeros":["85261","75033","30984","102664","88332","65800","67848","53512","83213","11537"],"glyphesCoches":[0,0,0,0,0,0,0,0,0,0],"affiche":true,"qualite":0}],` +
+    `"index":["985004"],` +
+    `"dateEnregistrement":"14/06/2019 à 12:52:16"}`;
 
 
