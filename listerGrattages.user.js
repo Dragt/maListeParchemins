@@ -4,7 +4,7 @@
 // @include */mountyhall/MH_Play/Actions/Competences/userscriptGrattage
 // @include */mountyhall/MH_Play/Play_equipement.php
 // @grant none
-// @version 1.4
+// @version 1.5
 // ==/UserScript==
 //
 
@@ -51,9 +51,15 @@
  * structure en dictionnaire pour les parchemins
  * notion de parchemins "bons" et "mauvais", avec boutons pour les faire changer de catégorie et filtre
  * ne va plus chercher les parchemins déjà connus en local, pour soulager au max le serveur (à tester)
- * possibiliter de choisir si les données importées complètent ou remplace l'actuel 
+ * possibiliter de choisir si les données importées complètent ou remplace l'actuel
  * recapitulatif remanié
- * champ de duree separe des autres carac 
+ * champ de duree separe des autres carac
+ */
+
+/*
+ * v1.5
+ * charger les parchemins 1 à 1...
+ * modifier une page existante plutôt que la 404...
  */
 
 // ****************************************************************************************************************************
@@ -74,6 +80,7 @@ displayDebug(window.location.href);
 
 const STATIQUE = 1;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
 const EXPORTER_PARCHEMINS = 0;   // affiche en console l'enregistrement des parchemins après récupération dans le hall
+const CHARGEMENT_AUTOMATIQUE = 0;
 
 const MAX_APPELS = 200;  // nombre maximum -1 de parchemins traités en une fois par l'outil
 let compteurSecuriteNombreAppels = 0;
@@ -545,7 +552,7 @@ class ParcheminEnPage extends Parchemin {
             enfants: [document.createTextNode('V')],
             events: [{ nom: 'click', fonction: this.changerQualite, bindElement: this, param: [QUALITE_BON, true] }],
             classesHtml: ['mh_form_submit'],
-            style : "background-color: #c9d8c5; margin: 5px", // vert
+            style : "background-color: #c9d8c5; margin: 5px", // vert #c9d8c5 // bleu  #a8b6bf // orange #edd9c0
         });
 
         this.boutonCacher = Createur.elem('button', {
@@ -610,8 +617,13 @@ class ParcheminEnPage extends Parchemin {
         }
     }
 
+
+    // TODO mettre un background transparent vert pour les bons et rouges pour les mauvais
+    // TODO ligneDetail, ligneEffettotal, Ligne separation....
     devenirBon(affichagesBon) {
         this.qualite = QUALITE_BON;
+        this.ligneEffetsGlyphes.style.backgroundColor = "#c9d8c533";// TODO mettre en constantes vert #c9d8c5 // bleu  #a8b6bf // orange #edd9c0
+        this.ligneEffetTotal.style.backgroundColor = "#c9d8c533";
         this.boutonBon.style.display = 'inline-block';
         this.boutonCacher.style.display = 'none';
         this.boutonMauvais.style.display = 'none';
@@ -625,6 +637,8 @@ class ParcheminEnPage extends Parchemin {
 
     devenirNeutre() {
         this.qualite = QUALITE_NEUTRE;
+        this.ligneEffetsGlyphes.style.backgroundColor = "#11111100";
+        this.ligneEffetTotal.style.backgroundColor = "#11111100";
         this.boutonBon.style.display = 'inline-block';
         this.boutonCacher.style.display = 'inline-block';
         this.boutonMauvais.style.display = 'inline-block';
@@ -638,6 +652,8 @@ class ParcheminEnPage extends Parchemin {
 
     devenirMauvais(affichagesMauvais) {
         this.qualite = QUALITE_MAUVAIS;
+        this.ligneEffetsGlyphes.style.backgroundColor = "#edd9c033";
+        this.ligneEffetTotal.style.backgroundColor = "#edd9c033";
         this.boutonBon.style.display = 'none';
         this.boutonCacher.style.display = 'none';
         this.boutonMauvais.style.display = 'inline-block';
@@ -667,7 +683,7 @@ class ParcheminEnPage extends Parchemin {
     _creerLigneSeparation(parent) {                                   // potentiellement static ...
         const trSeparation = Createur.elem('tr', { parent: parent, style: "text-align: center; display: none"  });
         const tdTirets = Createur.elem('td', {
-            texte: '------------------',
+            texte: '-----',
             style: "width: " + ParcheminEnPage.W_COL1,
             parent : trSeparation });
         ParcheminEnPage._mettreEnFormeTd(tdTirets);
@@ -1143,14 +1159,18 @@ class OutilListerGrattage {
         }
     }
 
-    chargerDepuisHall() {
-        // à mettre après préparation pour pouvoir table déjà créée ?
-        this.viderTableParchemins();    // pas nécessaire
-        this.viderTexteRecapitulatif(); // pas nécessaire ?
+
+    chargerListeParcheminsGrattablesDepuisHall() {
+        // à mettre après préparation pour pouvoir utiliser table déjà créée ?
+        // this.viderTableParchemins();    // pas nécessaire
+        // this.viderTexteRecapitulatif(); // pas nécessaire ?
         //this.index = [];              // pas nécessaire
+
+        if (!(CHARGEMENT_AUTOMATIQUE)) this.bloquerBoutonsChargement();
+
         this.recuperateur = new Recuperateur(this);
         this.recuperateur.vaChercherParchemins();
-        this.zoneDateEnregistrement.innerText = "Moment du chargement : " + new Date().toLocaleString();
+        this.zoneDateEnregistrement.innerText = "Moment du chargement : " + new Date().toLocaleString(); // TODO pas au meilleur endroit
     }
 
     // recoit les id/nom des parchemins du recuperateur (pourrait les recevoir un à un, intérêt ici ?)
@@ -1174,7 +1194,14 @@ class OutilListerGrattage {
         // Attention requêtes pour les glyphes des différents parchemins les unes à la suite des autres, ne doivent pas se chevaucher
         compteurSecuriteNombreAppels = 0;
         this.indexNouveauxParchemins =  parcheminsRecus.map(p => p.id);
-        this._appelerRechercherGlyphes();
+
+        if (CHARGEMENT_AUTOMATIQUE) {
+            this._appelerRechercherGlyphes();
+        }
+        else {
+            this.rafraichirBoutonPourChercherGlyphes();
+            this.debloquerBoutonsChargement();
+        }
     }
 
     _appelerRechercherGlyphes() {
@@ -1216,12 +1243,19 @@ class OutilListerGrattage {
             displayDebug("parchemin incomplet : " + p.id + " " + p.nom);
         }
 
-        this._appelerRechercherGlyphes() ;
+
         this._genererParcheminHtml(p, this.index.length); // TODO ouch, suite au refactoring je n'ai plus la position, rustine à la va vite, à voir si ça tient. :) Sinon rustine avec compteurSecuriteNombreAppels
         p.afficherParchemin();
-        // après avoir reçu des glyphes d'un parchemin à traiter, on fait la requête pour le parchemin suivant
-    }
 
+        if(CHARGEMENT_AUTOMATIQUE) {
+            this._appelerRechercherGlyphes();
+            // après avoir reçu des glyphes d'un parchemin à traiter, on fait la requête pour le parchemin suivant si automatique
+        }
+        else {
+            this.rafraichirBoutonPourChercherGlyphes
+            this.debloquerBoutonsChargement();
+        }
+    }
 
     reinitialiserChoix(affiche, cochages) {
         for (const id in this.parchemins) {
@@ -1252,22 +1286,13 @@ class OutilListerGrattage {
         for (let id of this.index) {
             const p = this.parchemins[id];
             if (p.qualite == QUALITE_BON) {
-                p.boutonBon.style.display = 'inline-block';
-                p.boutonCacher.style.display = "none";
-                p.boutonMauvais.style.display = "none";
-                if (this.affichagesBonsCheckbox.checked) p.afficherParchemin();
+                p.devenirBon();                  // en fait un peu trop, mais ça passe, faudrait scinder fonctions
             }
             else if (p.qualite == QUALITE_MAUVAIS) {
-                p.boutonBon.style.display = 'none';
-                p.boutonCacher.style.display = "none";
-                p.boutonMauvais.style.display = "inline-block";
-                if (this.affichagesMauvaisCheckbox.checked) p.afficherParchemin();
+                p.devenirMauvais()
             }
             else if (p.affiche) {
-                p.boutonBon.style.display = 'inline-block';
-                p.boutonCacher.style.display = "inline-block";
-                p.boutonMauvais.style.display = "inline-block";
-                p.afficherParchemin();
+                p.devenirNeutre();
             }
         }
     }
@@ -1407,6 +1432,7 @@ class OutilListerGrattage {
 
         this._attacherMessageIntro();
         this._attacherBoutonsChargement();
+        this._attacherBoutonsChargementHall();
         this._attacherInterfaceSupprimerParchemins();
         this._attacherInterfaceRecapituler();
         this._attacherInterfaceFiltrer();
@@ -1418,8 +1444,7 @@ class OutilListerGrattage {
 
     _attacherMessageIntro() {
         this.zone.innerHTML =
-            '<p>Pour que l\'outil fonctionne, vous devez être <strong>connecté</strong> à Mountyhall et disposer de <strong>au moins 2 PA</strong>.<br>' +
-            'Lors d\'un appel au Hall, pour chaque parchemin sur vous, vous ferez 2 appels au serveur mountyhall. Utilisez cet outil de manière responsable.<br>' +
+            '<p>Pour pouvoir charger de nouveaux parchemins, vous devez être <strong>connecté</strong> à Mountyhall et disposer de <strong>au moins 2 PA</strong>.<br>' +
             'Non testé avec des parchemins "spéciaux". (mission, sortilège...)<br>' +
             'Survolez avec la souris les noms des parchemins pour voir les effets initiaux. Survolez les glyphes pour voir les détails.</p>';
     }
@@ -1462,21 +1487,84 @@ class OutilListerGrattage {
             events: [{nom: 'click', fonction: this.afficherExport, bindElement: this}],
             classesHtml: ['mh_form_submit'] });
 
+        this.zoneDateEnregistrement = Createur.elem('span', { style: "margin: 10px", parent: divBoutonsChargement });
+    }
 
-        const boutonchargerDepuisHall = Createur.elem('button', {                        // boutonchargerDepuisHall
-                texte: 'Ajouter depuis votre inventaire (Hall)',
-                style: "margin: 10px 20px 10px 20px; background-color: #FF851B", //orange
-                parent: divBoutonsChargement,
-                events: [{nom: 'click', fonction: this.chargerDepuisHall, bindElement: this}],
-                classesHtml: ['mh_form_submit']
-            });
+
+    _attacherBoutonsChargementHall() {
+        const divBoutonsChargementHall = Createur.elem('div', {
+            parent: this.zone,
+            style: "margin:0vmin; padding:0.1vmin; border:solid 0px black"
+        });
+
+        this.boutonChargerListeParchemins = Createur.elem('button', {                        // boutonChargerDepuisHall
+            texte: 'Débuter Grattage pour liste parchemins (Hall)',
+            style: "margin: 10px 5px 10px 5px; background-color: #FF851B", //orange
+            parent: divBoutonsChargementHall,
+            events: [{nom: 'click', fonction: this.chargerListeParcheminsGrattablesDepuisHall, bindElement: this}],
+            classesHtml: ['mh_form_submit']
+        });
+
+        this.boutonChargerGlyphes = Createur.elem('button', {
+            texte: 'Débuter Grattage pour glyphes (Hall) du parchemin :',
+            style: "margin: 10px 5px 10px 5px; background-color: #FF851B", //orange
+            parent: divBoutonsChargementHall,
+            events: [{nom: 'click', fonction: this.chargerParcheminDepuisHall, bindElement: this}],
+            classesHtml: ['mh_form_submit']
+        });
+
+        this.inputParcheminACharger = Createur.elem('input', {
+            style: "margin: 10px 5px 10px 5px; width: 8em",
+            parent: divBoutonsChargementHall,
+            attributes: [['type', 'number'], ['step', '1']]
+        });
+
+        this.encoreCombien = Createur.elem('span', {
+            style: "margin: 10px 5px 10px 5px", //orange
+            texte: "Cliquer d'abord une fois sur : Débuter Grattage pour liste parchemins (Hall)",
+            parent: divBoutonsChargementHall
+        });
 
         if (STATIQUE) {
-            boutonchargerDepuisHall.style.backgroundColor = " #AAAAAA"; // gris
-            boutonchargerDepuisHall.disabled = true;
+            this.bloquerBoutonsChargement()
         }
 
-        this.zoneDateEnregistrement = Createur.elem('span', { style: "margin: 10px", parent: divBoutonsChargement });
+    }
+
+    bloquerBoutonsChargement() {
+        this.boutonChargerListeParchemins.style.backgroundColor = "#AAAAAA"; // gris
+        this.boutonChargerListeParchemins.disabled = true;
+        this.boutonChargerGlyphes.style.backgroundColor = "#AAAAAA";
+        this.boutonChargerGlyphes.disabled = true;
+    }
+
+    debloquerBoutonsChargement() {
+        this.boutonChargerListeParchemins.style.backgroundColor = "#FF851B"; // orange
+        this.boutonChargerListeParchemins.disabled = false;
+        this.boutonChargerGlyphes.style.backgroundColor = "#FF851B";
+        this.boutonChargerGlyphes.disabled = false;
+    }
+
+    rafraichirBoutonPourChercherGlyphes() {
+        if (this.indexNouveauxParchemins.length > 0) {
+            this.inputParcheminACharger.value = this.indexNouveauxParchemins[0];
+            this.encoreCombien.innerText = "Encore " + this.indexNouveauxParchemins.length + "parchemin(s)";
+        }
+        else {
+            this.inputParcheminACharger.value = "";
+            this.encoreCombien.innerText = "Plus de parchemins à charger";
+        }
+    }
+
+
+
+    chargerParcheminDepuisHall() {
+        this.recuperateur.vaChercherGlyphes(this.inputParcheminACharger);
+        const position = this.indexNouveauxParchemins.indexOf(this.inputParcheminACharger);
+        if (position !== -1) {
+            this.indexNouveauxParchemins.slice(position, 1);
+        }
+        this.bloquerBoutonsChargement();
     }
 
     _attacherInterfaceSupprimerParchemins() {
