@@ -4,7 +4,7 @@
     // @include */mountyhall/MH_Play/Actions/Competences/userscriptGrattage
     // @include */mountyhall/MH_Play/Play_equipement.php*
     // @grant none
-    // @version 1.5
+    // @version 1.6
     // ==/UserScript==
     //
 
@@ -60,6 +60,12 @@
      * v1.5
      * charger les parchemins 1 à 1...
      * modifier une page existante plutôt que la 404...
+     */
+
+    /* v1.6
+     * Ajout du marqueur "terminé" pour les parchemins
+     * mini amélioration récapitulatif
+     * possibilité de cacher tous les parchemins neutres
      */
 
     // ****************************************************************************************************************************
@@ -407,6 +413,7 @@
     const QUALITE_BON = 1;
     const QUALITE_NEUTRE = 0;
     const QUALITE_MAUVAIS = -1;
+    const QUALITE_TERMINE = 9;
     // constructor(id, nom, effetDeBaseTexte, glyphes)
     // get cochagesGlyphes
     // get effetTotalHtml
@@ -555,7 +562,7 @@
 
             this.boutonBon = Createur.elem('button', {
                 id: this.id + '-boutonBon',
-                attributs: [['title', 'Définir ce parchemin comme "bon"']],
+                attributs: [['title', 'Définir ce parchemin comme "bon".\nL\'objectif est de marquer les marchemins estimés bons à gratter, pour pouvoir facilement produire la liste des détails des parchemins à gratter.']],
                 enfants: [document.createTextNode('V')],
                 events: [{ nom: 'click', fonction: this.changerQualite, bindElement: this, param: [QUALITE_BON, true] }],
                 classesHtml: ['mh_form_submit'],
@@ -564,7 +571,7 @@
 
             this.boutonCacher = Createur.elem('button', {
                 id: this.id + '-boutonCacher',
-                attributs: [['title', 'Cacher ce parchemin temporairement']],
+                attributs: [['title', 'Cacher ce parchemin temporairement.\nL\'objectif est de retirer temporairement des parchemins de la liste. Ils redeviendront visibles lors d\'un tri/filtre ou en cliquant sur le bouton servant à les faire réapparaitre.']],
                 enfants: [document.createTextNode('_')],
                 events: [{ nom: 'click', fonction: this.cacherParchemin, bindElement: this }],
                 classesHtml: ['mh_form_submit'],
@@ -573,11 +580,20 @@
 
             this.boutonMauvais = Createur.elem('button', {
                 id: this.id + '-boutonMauvais',
-                attributs: [['title', 'Définir ce parchemin comme "mauvais"']],
+                attributs: [['title', 'Définir ce parchemin comme "mauvais"\nL\'objectif est de ne plus voir les parchemins impropres au grattage et à l\'utilisation et de pouvoir ensuite les lister facilement (pour savoir lesquels utiliser pour construire des golems de papier ou pour goinfrre par exemple).']],
                 enfants: [document.createTextNode('X')],
                 events: [{ nom: 'click', fonction: this.changerQualite, bindElement: this, param: [QUALITE_MAUVAIS, true] }],
                 classesHtml: ['mh_form_submit'],
                 style : "background-color: #edd9c0; margin: 5px", // orange
+            });
+
+            this.boutonTermine = Createur.elem('button', {
+                id: this.id + '-boutonTermine',
+                attributs: [['title', "Définir ce parchemin comme \"terminé\".\nL'objectif est de ne plus voir les parchemins avec lesquels on ne désire plus travailler: déjà gratté, bien en l'état, etc..."]],
+                enfants: [document.createTextNode('\u2605')],
+                events: [{ nom: 'click', fonction: this.changerQualite, bindElement: this, param: [QUALITE_TERMINE, true] }],
+                classesHtml: ['mh_form_submit'],
+                style : "background-color: #ffee90EE; margin: 5px", // gold
             });
 
             Createur.elem('td', {                                     // si besoin de nom : const tdIdParchemin
@@ -594,8 +610,10 @@
                     Createur.elem('br'),
                     this.boutonBon,
                     this.boutonCacher,
-                    this.boutonMauvais
-                    ] });
+                    this.boutonMauvais,
+                    this.boutonTermine
+                ]
+            });
 
             const tdEffetsGlyphes = Createur.elem('td', { parent: trEffetsGlyphes });
             const tableEffetsGlyphes = Createur.elem('table', { id: this.id, parent: tdEffetsGlyphes });
@@ -623,7 +641,7 @@
                     this.devenirBon();
                 }
             }
-            else { // QUALITE_MAUVAIS
+            else if (nouvelleQualite === QUALITE_MAUVAIS) { // QUALITE_MAUVAIS
                 if (this.qualite == QUALITE_MAUVAIS) {
                     if (inversion) this.devenirNeutre();
                 }
@@ -631,18 +649,31 @@
                     this.devenirMauvais();
                 }
             }
+            else if (nouvelleQualite === QUALITE_TERMINE) { // QUALITE_MAUVAIS
+                if (this.qualite == QUALITE_TERMINE) {
+                    if (inversion) this.devenirNeutre();
+                }
+                else {
+                    this.devenirTermine();
+                }
+            }
+            else {
+                console.log("Changement de marqueur inaproprié reçu pour le parchemin.");
+            }
         }
 
 
         // TODO mettre un background transparent vert pour les bons et rouges pour les mauvais
         // TODO ligneDetail, ligneEffettotal, Ligne separation....
-        devenirBon(affichagesBon) {
+        // TODO faire fonction générique pour devenirXXX
+        devenirBon() {
             this.qualite = QUALITE_BON;
             this.ligneEffetsGlyphes.style.backgroundColor = "#c9d8c533";// TODO mettre en constantes vert #c9d8c5 // bleu  #a8b6bf // orange #edd9c0
             this.ligneEffetTotal.style.backgroundColor = "#c9d8c533";
             this.boutonBon.style.display = 'inline-block';
             this.boutonCacher.style.display = 'none';
             this.boutonMauvais.style.display = 'none';
+            this.boutonTermine.style.display = 'none';
             if (document.getElementById('affichagesBonsCheckbox').checked) {  // moche de passer par là... et comme ça...
                 this.afficherParchemin();
             }
@@ -658,6 +689,7 @@
             this.boutonBon.style.display = 'inline-block';
             this.boutonCacher.style.display = 'inline-block';
             this.boutonMauvais.style.display = 'inline-block';
+            this.boutonTermine.style.display = 'inline-block';
             if (this.affiche) {
                 this.afficherParchemin();
             }
@@ -666,14 +698,31 @@
             }
         }
 
-        devenirMauvais(affichagesMauvais) {
+        devenirMauvais() {
             this.qualite = QUALITE_MAUVAIS;
             this.ligneEffetsGlyphes.style.backgroundColor = "#edd9c033";
             this.ligneEffetTotal.style.backgroundColor = "#edd9c033";
             this.boutonBon.style.display = 'none';
             this.boutonCacher.style.display = 'none';
             this.boutonMauvais.style.display = 'inline-block';
+            this.boutonTermine.style.display = 'none';
             if (document.getElementById('affichagesMauvaisCheckbox').checked) {
+                this.afficherParchemin();
+            }
+            else {
+                this.cacherParchemin();
+            }
+        }
+
+        devenirTermine() {
+            this.qualite = QUALITE_TERMINE;
+            this.ligneEffetsGlyphes.style.backgroundColor = "#ffee9022"; // gold
+            this.ligneEffetTotal.style.backgroundColor = "#ffee9022";
+            this.boutonBon.style.display = 'none';
+            this.boutonCacher.style.display = 'none';
+            this.boutonMauvais.style.display = 'none';
+            this.boutonTermine.style.display = 'inline-block';
+            if (document.getElementById('affichagesTerminesCheckbox').checked) {
                 this.afficherParchemin();
             }
             else {
@@ -1174,6 +1223,7 @@
             this.dateDerniereModification; // TODO permet de tester si correspond à celle de la sauvegarde, pour afficher si sauvé ou non
 
             this.parcheminsEnCoursDAjout = {};
+            this.indexEnCoursDAjout = [];
 
             // idéalement une classe pour la gui, mais ici c'est encore restreint
             this.table;
@@ -1260,11 +1310,11 @@
                 }
 
                 this.parcheminsEnCoursDAjout[p.id] = new ParcheminEnPage(p.id, p.nom);
-                const position = this.index.indexOf(p.id);
+                const position = this.indexEnCoursDAjout.indexOf(p.id);
                 if (position !== -1) {
-                    this.index.splice(position, 1);
+                    this.indexindexEnCoursDAjout.splice(position, 1);
                 }
-                this.index.push(p.id);
+                this.indexEnCoursDAjout.push(p.id);
             };
             // old : foreach...
             // old : this.construireIndex(CRITERE_ID); // on garde l'ordre précédent avant ajout pour le début, comme ça les nouveaux arrivent à la fin ?
@@ -1310,6 +1360,11 @@
 
             this.parchemins[parcheminRecu.id] = this.parcheminsEnCoursDAjout[parcheminRecu.id];
             const p = this.parchemins[parcheminRecu.id];
+            const position = this.index.indexOf(p.id);
+            if (position !== -1) {
+                this.index.splice(position, 1);
+            }
+            this.index.push(p.id);
             p.effetDeBaseTexte = parcheminRecu.effetDeBaseTexte;
             for (const glyphe of parcheminRecu.glyphes) {
                 p.ajouterGlyphe(new GlypheEnPage(glyphe.numero));
@@ -1372,7 +1427,10 @@
                     p.devenirBon();                  // en fait un peu trop, mais ça passe, faudrait scinder fonctions
                 }
                 else if (p.qualite == QUALITE_MAUVAIS) {
-                    p.devenirMauvais()
+                    p.devenirMauvais();
+                }
+                else if (p.qualite == QUALITE_TERMINE) {
+                    p.devenirTermine();
                 }
                 else if (p.affiche) {
                     p.devenirNeutre();
@@ -1470,6 +1528,7 @@
                 const parcheminsIdBons = [];
                 const parcheminsHtmlBons = [];
                 const parcheminsIdMauvais = [];
+                const parcheminsHtmlTermines = [];
                 const parcheminsHtmlAutres = [];
 
                 function preparerHtml(p) {
@@ -1489,15 +1548,22 @@
                     else if (this.parchemins[id].qualite === QUALITE_MAUVAIS) {
                         parcheminsIdMauvais.push(id);
                     }
+                    else if (this.parchemins[id].qualite === QUALITE_TERMINE) {
+                        //parcheminsIdTermines.push(id);  // utile ?
+                        parcheminsHtmlTermines.push(preparerHtml(this.parchemins[id]));
+                    }
                     else {
-                        parcheminsHtmlAutres.push(preparerHtml(this.parchemins[id]));
+                        if (this.parchemins[id].affiche) {
+                            parcheminsHtmlAutres.push(preparerHtml(this.parchemins[id]));
+                        }
                     }
                 }
 
                 let reponse = '<p><strong style="color:darkgreen">Parchemins \"bons\" :</strong> ' + (parcheminsIdBons.length ? parcheminsIdBons.join(', ') : 'aucun') + '</p>';
                 reponse += '<p><strong style="color:orangered">Parchemins \"mauvais\" :</strong> ' + (parcheminsIdMauvais.length ? parcheminsIdMauvais.join(', ') : 'aucun') + '</p>';
                 reponse += '<p><strong style="color:darkgreen">Détails parchemins \"bons\" :</strong> ' + (parcheminsHtmlBons.length ? parcheminsHtmlBons.join('') : 'aucun') + '</p>';
-                reponse += '<p><strong style="color:dimgrey">Détails autres parchemins :</strong> ' + (parcheminsHtmlAutres.length ? parcheminsHtmlAutres.join('') : 'aucun') + '</p>';
+                reponse += '<p><strong style="color:gold">Détails parchemins \"terminés\" :</strong> ' + (parcheminsHtmlTermines.length ? parcheminsHtmlTermines.join('') : 'aucun') + '</p>';
+                reponse += '<p><strong style="color:dimgrey">Détails autres parchemins visibles :</strong> ' + (parcheminsHtmlAutres.length ? parcheminsHtmlAutres.join('') : 'aucun') + '</p>';
 
                 this.texteRecapitulatif.innerHTML = reponse;
             }
@@ -1527,9 +1593,9 @@
 
         _attacherMessageIntro() {
             this.zone.innerHTML =
-                '<p>Pour pouvoir charger de nouveaux parchemins, vous devez être <strong>connecté</strong> à Mountyhall et disposer de <strong>au moins 2 PA</strong>.<br>' +
-                'Non testé avec des parchemins "spéciaux". (mission, sortilège...)<br>' +
-                'Survolez avec la souris les noms des parchemins pour voir les effets initiaux. Survolez les glyphes pour voir les détails.</p>';
+                '<p>Pour pouvoir charger de nouveaux parchemins, vous devez être <strong>connecté</strong> à Mountyhall et disposer de <strong>au moins 2 PA</strong>. ' +
+                'Ne prend pas en compte les parchemins "spéciaux" (mission, sortilège...)<br>' +
+                'Survoler avec la souris : les noms des parchemins pour voir les effets initiaux, les glyphes pour voir les détails, les champs et boutons pour plus d\'infos.</p>';
         }
 
         _attacherBoutonsChargement() {
@@ -1807,7 +1873,7 @@ Après la recherche des glyphes d'un parchemin, le champ est mis à jour automat
             });
 
             Createur.elem('label', {
-                texte : "Afficher les \"bons\" parchemins.",
+                texte : "Afficher les \"bons\"",
                 parent: divCriteresAffichages,
                 style: "margin:5px 5px 5px 0; padding:3px",
                 attributs : [["for", "affichagesBonsCheckbox"]]
@@ -1827,10 +1893,28 @@ Après la recherche des glyphes d'un parchemin, le champ est mis à jour automat
             this.affichagesMauvaisCheckbox.checked = false;
 
             Createur.elem('label', {
-                texte : "Afficher les \"mauvais\" parchemins.",
+                texte : "Afficher les \"mauvais\"",
                 parent: divCriteresAffichages,
                 style: "margin:5px 5px 5px 0; padding:3px",
                 attributs : [["for", "affichagesMauvaisCheckbox"]]
+            });
+
+            // ---------- checkbox terminé
+
+            this.affichagesTerminesCheckbox = Createur.elem('input', {
+                id : "affichagesTerminesCheckbox",
+                parent: divCriteresAffichages,
+                style: "margin:5px 0 5px 20px; padding:3px",
+                attributs : [["type", "checkbox"], ["checked", "false"], ["name", "affichagesTerminesCheckbox"]],
+                events: [{nom: 'change', fonction: this.afficherSelonQualite, bindElement: this, param: [QUALITE_TERMINE]}]
+            });
+            this.affichagesTerminesCheckbox.checked = true;
+
+            Createur.elem('label', {
+                texte : "Afficher les \"terminés\"",
+                parent: divCriteresAffichages,
+                style: "margin:5px 5px 5px 0; padding:3px",
+                attributs : [["for", "affichagesTerminesCheckbox"]]
             });
 
 
@@ -1859,23 +1943,45 @@ Après la recherche des glyphes d'un parchemin, le champ est mis à jour automat
                 id : "boutonRendreVisibleCaches",
                 parent: divCriteresAffichages,
                 style: "margin:5px 0 5px 20px; padding:3px", // background-color: #a8b6bf
-                attributs : [["type", "button"], ["name", "boutonRendreVisibleCaches"], ["value", "Rendre visibles les parchemins \"cachés\""]],
+                attributs : [["type", "button"], ["name", "boutonRendreVisibleCaches"], ["value", "Rendre visibles les parchemins \"neutres\""]],
                 events: [{nom: 'click', fonction: this.rendreVisibleCaches, bindElement: this}],
                 classesHtml: ['mh_form_submit']
             });
+
+            Createur.elem('input', {                         // boutonRendreVisibleCaches
+                id : "boutonCacherNeutres",
+                parent: divCriteresAffichages,
+                style: "margin:5px 0 5px 20px; padding:3px", // background-color: #a8b6bf
+                attributs : [["type", "button"], ["name", "boutonCacherNeutres"], ["value", "Cacher les parchemins \"neutres\""]],
+                events: [{nom: 'click', fonction: this.cacherNeutres, bindElement: this}],
+                classesHtml: ['mh_form_submit']
+            });
+
         }
 
         rendreVisibleCaches() {
             for (const id in this.parchemins) {
-                if (this.parchemins[id].qualite === QUALITE_NEUTRE) /// hm... devrait-on pouvoir cachee un bon alors que "bons visibles" est coché ?
+                if (this.parchemins[id].qualite === QUALITE_NEUTRE) /// hmm... devrait-on pouvoir cacher un bon alors que "bons visibles" est coché ?
                     if (!this.parchemins[id].affiche)
                         this.parchemins[id].afficherParchemin();
             }
         }
 
+        cacherNeutres() {
+            for (const id in this.parchemins) {
+                if (this.parchemins[id].qualite === QUALITE_NEUTRE)
+                    if (this.parchemins[id].affiche)
+                        this.parchemins[id].cacherParchemin();
+            }
+        }
+
         // TODO à méditer : est-ce ok ou non de cacher les bons ou mauvais en jouant en parallèle sur l'aspect caché temporairement ?
+        // TODO : est-ce que le checkbox pourait envoyer directement la valeur du check pour ne pas avoir à les récupérer ici ?
         afficherSelonQualite(qualiteConcernee) {
-            const valeurCheckbox = ((qualiteConcernee === QUALITE_BON) ? this.affichagesBonsCheckbox.checked : this.affichagesMauvaisCheckbox.checked );
+            let valeurCheckbox = true;
+            if (qualiteConcernee === QUALITE_BON) valeurCheckbox = this.affichagesBonsCheckbox.checked;
+            else if (qualiteConcernee === QUALITE_MAUVAIS) valeurCheckbox = this.affichagesMauvaisCheckbox.checked;
+            else if (qualiteConcernee === QUALITE_TERMINE) valeurCheckbox = this.affichagesTerminesCheckbox.checked;
 
             for (const id in this.parchemins) {
                 if (this.parchemins[id].qualite === qualiteConcernee) {
