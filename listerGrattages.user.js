@@ -88,7 +88,7 @@ displayDebug(window.location.href);
 
 //---------------------- variables globales et constantes : Général -----------------------//
 
-const STATIQUE = 0;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
+const STATIQUE = 1;               // 0 -> normal en ligne // 1 -> utilise pachemins hardcodés en bas de fichier
 const EXPORTER_PARCHEMINS = 0;   // affiche en console l'enregistrement des parchemins après récupération dans le hall
 const CHARGEMENT_AUTOMATIQUE = 0;
 
