@@ -1446,7 +1446,7 @@ class OutilListerGrattage {
             this.parcheminsEnCoursDAjout[p.id] = new ParcheminEnPage(p.id, p.nom);
             const position = this.indexEnCoursDAjout.indexOf(p.id);
             if (position !== -1) {
-                this.indexindexEnCoursDAjout.splice(position, 1);
+                this.indexEnCoursDAjout.splice(position, 1);
             }
             this.indexEnCoursDAjout.push(p.id);
         }
