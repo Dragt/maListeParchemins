@@ -738,7 +738,7 @@ class ParcheminEnPage extends Parchemin {
     rendreVisibleParcheminAdequat(coche, actif, listeAffiches=[]) {
         // soit une liste est fournie et on se base dessus, soit on utilise les cochages
         if (listeAffiches.length > 0 ) { // vu fonctionnement pas besoin de document.getElementById('affichagesSurSoiCheckbox').checked
-            if (listeAffiches.includes(Number(this.id))) { //TODO pas terrible, définir clairement le type
+            if (listeAffiches.includes(this.id)) { //TODO pas terrible, définir clairement le type
                 this.afficherParchemin();
             }
             else {
@@ -1339,7 +1339,7 @@ class OutilListerGrattage {
         // this.dateDerniereModification; // pas utile ?
         // ??? TODO permet de tester si correspond à celle de la sauvegarde, pour afficher si sauvé ou non
 
-        this.parcheminsSurSoi = [4986515, 10769725]; // simuler parchemins sur soi
+        this.parcheminsSurSoi = ["4986515", "10769725"]; // simuler parchemins sur soi
         //this.parcheminsSurSoi = [];
         this.parcheminsEnCoursDAjout = {};
         this.indexEnCoursDAjout = [];
