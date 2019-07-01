@@ -80,7 +80,13 @@
  * possibilité d'afficher les parchemins sur soi.
  * possibilité de supprimer un parchemin (et non plus de définir une liste comme mauvais)
  * sauvegarde les critères d'affichage
+ * Le filtre/tri ne change plus le "cochage" des parchemins marqués "à gratter" ou "termines
  */
+
+/* v1.8
+ * possibilite d'enregistrer et recuperer les sauvegardes en ligne
+ */
+
 
 // ****************************************************************************************************************************
 // Inspiré de l'algorithme de détermination des effets des Grattages des gribouillages par trollthar (85665) et
@@ -117,6 +123,10 @@ const COULEUR_AUTRE = '#000000'; // noir '000000'
 
 const AU_MOINS = 1;
 const AU_PLUS = -1;
+
+let NUMERO_TROLL;
+
+if (STATIQUE) NUMERO_TROLL = 666666666;
 
 
 //---------------------- variables globales et constantes : Analyse des glyphes  -----------------------//
@@ -1339,8 +1349,8 @@ class OutilListerGrattage {
         // this.dateDerniereModification; // pas utile ?
         // ??? TODO permet de tester si correspond à celle de la sauvegarde, pour afficher si sauvé ou non
 
-        this.parcheminsSurSoi = ["4986515", "10769725"]; // simuler parchemins sur soi
-        //this.parcheminsSurSoi = [];
+        // this.parcheminsSurSoi = ["4986515", "10769725"]; // simuler parchemins sur soi
+        this.parcheminsSurSoi = [];
         this.parcheminsEnCoursDAjout = {};
         this.indexEnCoursDAjout = [];
 
@@ -1398,6 +1408,7 @@ class OutilListerGrattage {
     Etes-vous bien connecté à MH ? 
     Avez-vous encore 2 PA ? 
     Connaissez-vous la compétence Gratter ?`);
+            this.debloquerBoutonsChargement();
             return;
         }
 
@@ -1450,7 +1461,7 @@ class OutilListerGrattage {
             }
             this.indexEnCoursDAjout.push(p.id);
         }
-        ;
+
         // old : foreach...
         // old : this.construireIndex(CRITERE_ID); // on garde l'ordre précédent avant ajout pour le début, comme ça les nouveaux arrivent à la fin ?
 
@@ -1534,10 +1545,11 @@ class OutilListerGrattage {
     }
 
     // TODO : affiche plus nécessaire, on ne cache plus
+    // TODO : envoyer la liste des groupes pour lesquels on veut reinitialiser ? Ici hardcode tout sauf "a gratter" et "termines"
     reinitialiserChoix(affiche, cochages) {
         for (const id in this.parchemins) {
-            if (affiche) this.parchemins[id].affiche = true;
-            if (cochages) {
+            if (affiche) this.parchemins[id].affiche = true; // inutile
+            if (cochages && !([QUALITE_BON, QUALITE_TERMINE].includes(this.parchemins[id].qualite))) {
                 for (const g of this.parchemins[id].glyphes) {
                     g.decocher();
                 }
@@ -1584,6 +1596,7 @@ class OutilListerGrattage {
         displayDebug("afficherParcheminsFiltres");
         // choix de reinitialiser pour pouvoir cocher les options les plus puissantes et voir rapidement l'interet
         // laisser les cochages de l'utilisateur aussi peut être inétressant (et demander moins de progra. ;) ), j'ai fait comme je préfère
+        // pour finir laisse choix pour "à gratter" et "termine"
         this.reinitialiserChoix(true, true);
         const type = this.filtre.type.value;
         const puissance = Number(this.filtre.puissance.value);
@@ -1608,16 +1621,17 @@ class OutilListerGrattage {
             }
 
             if (garde) {
+                const cocher = !([QUALITE_BON, QUALITE_TERMINE].includes(p.qualite)); // hardcode ici qu'on ne coche pas pour les "à gratter" et "termines"
                 if (type == AU_MOINS) {
                     if (carac == COMBINAISON) {
                         valeur = p.calculerTotalPuissances();
                     }
                     else if (carac == TOUTES) {
                         const caracMax = p.calculerCaracMax();
-                        valeur = p.calculerValeurMax(caracMax, true);
+                        valeur = p.calculerValeurMax(caracMax, cocher);
                     }
                     else {
-                        valeur = p.calculerValeurMax(carac, true);
+                        valeur = p.calculerValeurMax(carac, cocher);
                     }
                     if (valeur < puissance) garde = false;
                 }
@@ -1627,10 +1641,10 @@ class OutilListerGrattage {
                     }
                     else if (carac == TOUTES) {
                         const caracMin = p.calculerCaracMin();
-                        valeur = p.calculerValeurMin(caracMin, true);
+                        valeur = p.calculerValeurMin(caracMin, cocher);
                     }
                     else {
-                        valeur = p.calculerValeurMin(carac, true);
+                        valeur = p.calculerValeurMin(carac, cocher);
                     }
                     if (valeur > puissance) garde = false;
                 }
@@ -1656,14 +1670,17 @@ class OutilListerGrattage {
 
     nettoyerParchemins() {
         const idParcheminsASupprimer = document.getElementById('parcheminsASupprimer').value.replace(/\s/g, "").split(','); //enlève les blancs et espaces
+        let message = "Parchemin(s) supprimé(s) : \n";
         for (const id of  idParcheminsASupprimer) {
             // old if (id in this.parchemins) this.parchemins[id].changerQualite(QUALITE_MAUVAIS);
             if (id in this.parchemins) {
+                message += id + " " + this.parchemins[id].effetDeBaseTexte + "\n";
                 this.parchemins[id].cacherParchemin(); // pas top il reste caché dans la page, mais fait l'affaire
                 delete this.parchemins[id];
                 this.index = this.index.filter(x => (x != id));
             }
         }
+        alert(message);
     }
 
 
@@ -1686,6 +1703,7 @@ class OutilListerGrattage {
             const parcheminsHtmlPasToucher = [];
             const parcheminsIdMauvais = [];
             const parcheminsHtmlMauvais = [];
+            const parcheminsIdAutres = [];
             const parcheminsHtmlAutres = [];
 
             function preparerHtml(p, avecGlyphes=true) {
@@ -1720,7 +1738,8 @@ class OutilListerGrattage {
                     parcheminsHtmlPasToucher.push(preparerHtml(this.parchemins[id], false));
                 }
                 else {
-                    if (this.parchemins[id].affiche) {
+                    if (this.parchemins[id].qualite === QUALITE_NEUTRE) {
+                        parcheminsIdAutres.push(id);
                         parcheminsHtmlAutres.push(preparerHtml(this.parchemins[id]));
                     }
                 }
@@ -1731,6 +1750,7 @@ class OutilListerGrattage {
             reponse += '<p><strong style="color:gold">Parchemins \"terminés\" :</strong> ' + (parcheminsIdTermines.length ? parcheminsIdTermines.join(', ') : 'aucun') + '</p>';
             reponse += '<p><strong style="color:mediumblue">Parchemins \"à garder tels quels\" :</strong> ' + (parcheminsIdPasToucher.length ? parcheminsIdPasToucher.join(', ') : 'aucun') + '</p>';
             reponse += '<p><strong style="color:orangered">Parchemins \"mauvais\" :</strong> ' + (parcheminsIdMauvais.length ? parcheminsIdMauvais.join(', ') : 'aucun') + '</p>';
+            reponse += '<p><strong style="color:darkslategrey">Parchemins \"neutres\" à traiter :</strong> ' + (parcheminsIdAutres.length ? parcheminsIdAutres.join(', ') : 'aucun') + '</p>';
 
             reponse += '<p><strong><em>---------------------------------------- Détails ----------------------------------------</em></strong></p>';
             reponse += '<p><strong style="color:darkgreen">Détails parchemins \"à gratter\" :</strong> ' + (parcheminsHtmlBons.length ? parcheminsHtmlBons.join('') : 'aucun') + '</p>';
@@ -1789,13 +1809,17 @@ class OutilListerGrattage {
 
         Createur.elem('button', {                       // boutonChargerLocalement
             texte: 'Charger (navigateur)',
-            style: "margin: 10px 5pxpx 10px 5px",
+            style: "margin: 10px 5px 10px 5px",
             parent: divBoutonsChargement,
             events: [{nom: 'click', fonction: this.chargerLocalement, bindElement: this}],
             classesHtml: ['mh_form_submit'],
-            attributs: [['title', `Charge les parchemins depuis la mémoire local de votre navigateur.
-    Nécessite une sauvegarde au préalable.`]]
+            attributs: [['title', `Charge les parchemins depuis la mémoire locale de votre navigateur.
+Il s'agit du chargement PAR DEFAUT.
+Ne supprime aucun parchemin de la liste en cours. Ajoute et place en fin de liste les parchemins se trouvant dans la sauvegarde.
+Nécessite une sauvegarde au préalable.`]]
         });
+
+        // ------------------------
 
         Createur.elem('button', {                       // boutonImporterTexte
             texte: 'Importer (texte)',
@@ -1824,6 +1848,35 @@ class OutilListerGrattage {
             attributs: [['title', `Place dans votre presse-papier une copie des parchemins au format texte structuré.
     Vous pouvez donc ensuite coller (ctrl-v) simplement l'enregistrement.`]]
         });
+
+        // ------------------------ TURLU
+
+        Createur.elem('button', {                        // boutonSauvegarderEnLigne
+            texte: 'Sauvegarder (cloud)',
+            style: "margin: 10px 5px 10px 20px; background-color: #0074D9", // bleu
+            parent: divBoutonsChargement,
+            events: [{nom: 'click', fonction: this.sauvegarderEnLigne, bindElement: this}],
+            classesHtml: ['mh_form_submit'],
+            attributs: [['title', `Sauvegarde dans le cloud vos parchemins et l'état de vos analyses.
+Ceci enregistre "en ligne" les données concernant cette page, sur un serveur distinct de Mountyhall, pour pouvoir les récupérer par la suite.
+Les données enregistrées concernent uniquement les parchemins, leurs glyphes ainsi que les paramètres de l'interface.
+Le serveur de données peut être considéré comme "amateur" : il a pour simple vocation d'être "utile". Pour donner une idée, le gestionnaire de ce service l'utilise sans crainte et conseillerait à ses amis de l'utiliser. Cependant, si vous considérez les données de vos parchemins comme cruciales et strictement confidentielles, il ne vous est pas recommandé d'utiliser ce service. (Cela va de même pour tous les outils externes à mh...) De plus, ce service pouvant tomber en panne ou être arrêté à tout moment, il vous est conseillé de conserver des copies locales de vos données (exporter sous format texte) si elles ont de l'importance pour vous.
+Pour information, le gestionnaire de se service se réserve le droit de traiter les données des parchemins stockés, de manière anonyme, pour effectuer des études globales concernant la compétence Gratter. Exemple : déterminer la puissance moyenne des glyphes, quelles sont les puissances les plus hautes obtenues, quelles sont les glyphes les plus fréquentes, etc.`]]
+        });
+        // TODO : title pourrait être trop long dans certains navigateurs
+
+        Createur.elem('button', {                       // boutonChargerEnLigne
+            texte: 'Charger (cloud)',
+            style: "margin: 10px 10px 10px 5px",
+            parent: divBoutonsChargement,
+            events: [{nom: 'click', fonction: this.chargerEnLigne, bindElement: this}],
+            classesHtml: ['mh_form_submit'],
+            attributs: [['title', `Charge les parchemins depuis le cloud.
+Ne supprime aucun parchemin de la liste en cours. Ajoute et place en fin de liste les parchemins se trouvant dans la sauvegarde.
+Nécessite une sauvegarde au préalable.`]]
+        });
+
+        // ------------------------
 
         this.zoneDateEnregistrement = Createur.elem('span', {style: "margin: 10px", parent: divBoutonsChargement});
     }
@@ -2031,7 +2084,7 @@ Possibilité d'introduire plusieurs numéros séparés par une virgule.`]],
               title=" Toutes caracs : travaille sur base de la carac la plus élevée (ou la plus basse), 
     en dehors de la durée et de l'effet de zone, pour chaque parchemin. 
     En cas d'égalité il en prend une au hasard.
-    L'outil va également cocher les glyphes pour obtenir l'effet le plus puissant recherché.
+    L'outil va également cocher les glyphes des parchemins pour obtenir l'effet le plus puissant recherché SAUF pour les parchemins marqués 'à gratter' et 'terminés' pour lesquels les cochages enregistrés ne seront pas modifiés.
 
 Combinaison : travaille sur base de la somme du total de tous les effets du parchemin (hors effet de zone et hors durée) multiplié par la durée positive potentielle du parchemin.">`;
         html += `<option value="${TOUTES}">Toutes caracs</option>`;
@@ -2057,6 +2110,7 @@ Combinaison : travaille sur base de la somme du total de tous les effets du parc
             `<button style="margin:5px; padding:3px" class="mh_form_submit" id="boutonRecherche" 
 title="N'affiche que les parchemins répondant aux critères.
 Trie grosso modo sur base du critère de puissance demandé (puis sur l'id des parchemins en cas d'égalité).
+L'outil va également cocher les glyphes des parchemins pour obtenir l'effet le plus puissant recherché SAUF pour les parchemins marqués 'à gratter' et 'terminés' pour lesquels les cochages enregistrés ne seront pas modifiés.
 Change le numéro d'ordre affiché pour les parchemins.">Filtrer et Trier</button>`;
 
         divFiltrer.innerHTML = html;
@@ -2358,6 +2412,7 @@ Change le numéro d'ordre affiché pour les parchemins.">Filtrer et Trier</butto
     // TODO ne plus enregistrer l'indexe, le recréer au chargement. A la limite en précisant le critère (pour lorsque remplacement par exemple)
     exporterParchemins() {
         const sauvegarde = {     // Sauvegarde pourrait avoir sa classe
+            numeroTroll: String(NUMERO_TROLL),
             dateEnregistrement: new Date().toISOString(),
             criteresAffichage: this.recupererCriteresAffichage(),
             parchemins: [],
@@ -2454,8 +2509,34 @@ Change le numéro d'ordre affiché pour les parchemins.">Filtrer et Trier</butto
         }
     }
 
+    chargerEnLigne() {
+        const url = "https://mh-storage.herokuapp.com/listerGrattages/api/v1/recuperer";
+        fetch(url, {
+            method : "POST",
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({numeroTroll: String(NUMERO_TROLL)})
+        }).then(
+            response => response.json()
+        ).then(
+            data => {
+                console.log(data);
+                if ("error" in data) {
+                    alert("Problème rencontré lors de la récupération des données.");
+                }
+                else if ("aucun" in data) {
+                    alert("Aucune sauvegarde retrouvée.");
+                }
+                else {
+                    this.importerParcheminsEtAfficher(data);
+                }
+            }
+        );
+    }
+
     supprimerTousLesParchemins() {
-        if (confirm("Désirez-vous effacer les parchemins en cours ?")) {
+        if (confirm("Désirez-vous supprimer tous les parchemins en cours ?")) {
             this.parchemins = {};
             this.index = [];
             this.incomplets = [];
@@ -2464,10 +2545,46 @@ Change le numéro d'ordre affiché pour les parchemins.">Filtrer et Trier</butto
     }
 
     sauvegarderLocalement() {
-        const sauvegardeTexte = JSON.stringify(this.exporterParchemins());
-        console.log(sauvegardeTexte); // normalement il y a l'export pour ça...
-        window.localStorage.setItem('sauvegardeListerGrattages', sauvegardeTexte);
-        alert("Etat sauvegardé.");
+        if (confirm(`Désirez-vous sauvegarder localement dans votre navigateur ?
+Cela écrasera l'éventuelle sauvegarde précédente.
+
+(Si vous désirez plutôt compléter l'état de la sauvegarde précédente, veuillez au préalable charger cette sauvegarde via le bouton adéquat pour compléter la liste en cours.)`)) {
+            const sauvegardeTexte = JSON.stringify(this.exporterParchemins());
+            console.log(sauvegardeTexte); // normalement il y a l'export pour ça...
+            window.localStorage.setItem('sauvegardeListerGrattages', sauvegardeTexte);
+            alert("Etat sauvegardé.");
+        }
+    }
+
+    sauvegarderEnLigne() {
+
+        if (confirm(`Désirez-vous sauvegarder dans le cloud ?
+Cela écrasera l'éventuelle sauvegarde précédente.
+
+(Si vous désirez plutôt compléter l'état de la sauvegarde précédente, veuillez au préalable charger cette sauvegarde via le bouton adéquat pour compléter la liste en cours.)`)) {
+
+            const sauvegardeTexte = JSON.stringify(this.exporterParchemins());
+
+            const url = "https://mh-storage.herokuapp.com/listerGrattages/api/v1/ajouter";
+            fetch(url, {
+                method : "POST",
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: sauvegardeTexte
+            }).then(
+                response => response.json()
+            ).then(
+                data => {
+                    if ("error" in data) {
+                        alert("Problème rencontré lors de l'enregistrement des données.");
+                    }
+                    else {
+                        alert("Sauvegarde enregistrée.");
+                    }
+                }
+            );
+        }
     }
 
     validerImport(critereCompleter) {
@@ -2579,6 +2696,8 @@ function traitementEquipement() {
         displayDebug("Numéro de Trõll non trouvé : abandon");
         return;
     }
+    NUMERO_TROLL = numTroll;
+
     tr = document.getElementById("mh_objet_hidden_" + numTroll + "Parchemin");
     if (!tr) {
         displayDebug("Table des parchos non trouvée : abandon");
